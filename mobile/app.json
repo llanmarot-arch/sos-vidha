@@ -1,0 +1,70 @@
+{
+  "expo": {
+    "name": "SOS-Vidha",
+    "slug": "sos-vidha",
+    "version": "1.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F172A"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.sosvidha.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "SOS-Vidha needs your location to monitor safe zones and transit routes.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "SOS-Vidha requires background location to detect zone deviations and route anomalies while the app is minimized.",
+        "NSFaceIDUsageDescription": "SOS-Vidha uses Face ID to securely disarm safety alerts.",
+        "UIBackgroundModes": [
+          "location",
+          "fetch",
+          "processing"
+        ]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0F172A"
+      },
+      "package": "com.sosvidha.app",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "WAKE_LOCK"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow SOS-Vidha to access your location in the background for continuous safety monitoring.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      "expo-asset",
+      "expo-font"
+    ],
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/icon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "sos-vidha-local"
+      }
+    }
+  }
+}

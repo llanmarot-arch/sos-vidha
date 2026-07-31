@@ -1,0 +1,41 @@
+export const tokens = {
+  color: {
+    bg0: '#000000',
+    bg1: '#0A0A0C',
+    bg2: '#121214',
+    primary: '#008080',
+    primaryLight: '#00A896',
+    primaryBright: '#02C39A',
+    critical: '#DC2626',
+    criticalDark: '#991B1B',
+    warning: '#00A896',
+    surface: '#121214',
+    surfaceElevated: '#1A1A1E',
+    border: '#27272A',
+    text: '#FFFFFF',
+    textMuted: '#A1A1AA',
+    textSubtle: '#71717A',
+    success: '#02C39A',
+    error: '#DC2626',
+    overlay: 'rgba(0, 0, 0, 0.88)',
+  },
+  spacing: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 },
+  radius: { sm: 8, md: 12, lg: 16, xl: 24, pill: 999 },
+  typography: {
+    hero: { fontSize: 26, fontWeight: '800', letterSpacing: 0.6 },
+    title: { fontSize: 18, fontWeight: '700', letterSpacing: 0.3 },
+    subtitle: { fontSize: 13, fontWeight: '600', color: '#A1A1AA' },
+    body: { fontSize: 14, fontWeight: '400', lineHeight: 20 },
+    caption: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase' },
+    mono: { fontSize: 12, fontFamily: 'monospace' },
+  },
+  device: { width: 390, height: 844 },
+};
+
+export const SOS_STATES = {
+  IDLE: 'IDLE',
+  HOLDING: 'HOLDING',
+  COUNTDOWN: 'COUNTDOWN',
+  DISPATCHING: 'DISPATCHING',
+  ACTIVE_ALERT: 'ACTIVE_ALERT',
+};

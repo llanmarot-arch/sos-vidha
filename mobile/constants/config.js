@@ -1,0 +1,23 @@
+export const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3001';
+export const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || API_BASE_URL;
+
+export const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN || '';
+export const GOOGLE_DIRECTIONS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_DIRECTIONS_KEY || '';
+
+export const GEOFENCE_RADIUS_MIN_M = 100;
+export const GEOFENCE_RADIUS_MAX_M = 5000;
+export const GEOFENCE_DEFAULT_RADIUS_M = 500;
+
+export const ZONE_EXIT_COUNTDOWN_SEC = 30;
+export const ZONE_EXIT_FAST_COUNTDOWN_SEC = 10;
+export const HIGH_SPEED_THRESHOLD_KMH = 35;
+
+export const ROUTE_DEVIATION_THRESHOLD_M = 300;
+export const ROUTE_DEVIATION_GRACE_MS = 40000;
+export const ROUTE_ACK_COUNTDOWN_SEC = 30;
+
+export const HEARTBEAT_INTERVAL_MS = 15000;
+
+export const LOCATION_TASK_NAME = 'SOS_VIDHA_BACKGROUND_LOCATION';
+export const LOCATION_UPDATE_INTERVAL_MS = 3000;
+export const LOCATION_DISTANCE_INTERVAL_M = 5;
