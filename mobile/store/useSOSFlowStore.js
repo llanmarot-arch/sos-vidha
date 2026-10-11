@@ -1,14 +1,25 @@
 import { create } from 'zustand';
 import { SOS_STATES } from '../theme/tokens';
 
+const initialAlertState = {
+  sessionId: null,
+  localIncidentId: null,
+  trackingUrl: null,
+  disarmToken: null,
+  dispatchError: null,
+  followUpError: null,
+  alertStartedAt: null,
+  alertLocation: null,
+  alertsMode: null,
+  deliveries: [],
+  alertStatusError: null,
+};
+
 export const useSOSFlowStore = create((set, get) => ({
   sosState: SOS_STATES.IDLE,
   holdProgress: 0,
   countdownSeconds: 0,
-  sessionId: null,
-  trackingUrl: null,
-  dispatchError: null,
-  alertStartedAt: null,
+  ...initialAlertState,
 
   setHoldProgress: (holdProgress) => set({ holdProgress }),
 
@@ -19,16 +30,44 @@ export const useSOSFlowStore = create((set, get) => ({
       sosState: SOS_STATES.IDLE,
       holdProgress: 0,
       countdownSeconds: 0,
-      sessionId: null,
-      trackingUrl: null,
-      dispatchError: null,
-      alertStartedAt: null,
+      ...initialAlertState,
     }),
 
-  setSession: (sessionId, trackingUrl) =>
-    set({ sessionId, trackingUrl, alertStartedAt: Date.now() }),
+  /** `activatedAt` is the server-recorded activation time when the server provides one. */
+  setSession: (sessionId, trackingUrl, disarmToken, { activatedAt, alertLocation, alertsMode, localIncidentId } = {}) =>
+    set({
+      sessionId,
+      localIncidentId: localIncidentId || null,
+      trackingUrl,
+      disarmToken,
+      alertStartedAt: activatedAt || Date.now(),
+      alertLocation: alertLocation || null,
+      alertsMode: alertsMode || null,
+      dispatchError: null,
+      followUpError: null,
+    }),
 
   setCountdown: (countdownSeconds) => set({ countdownSeconds }),
 
+  /** Only for failures before the server recorded an incident. */
   setDispatchError: (dispatchError) => set({ dispatchError, sosState: SOS_STATES.IDLE }),
+
+  /** For failures after the incident exists: the alert stays active. */
+  setFollowUpError: (followUpError) => set({ followUpError }),
+
+  setAlertStatus: ({ deliveries, alertsMode, location }) =>
+    set((state) => ({
+      deliveries: Array.isArray(deliveries) ? deliveries : state.deliveries,
+      alertsMode: alertsMode || state.alertsMode,
+      alertLocation: location || state.alertLocation,
+      alertStatusError: null,
+    })),
+
+  setAlertStatusError: (alertStatusError) => set({ alertStatusError }),
+
+  upsertDelivery: (delivery) => {
+    if (!delivery?.id) return;
+    const deliveries = get().deliveries.filter((d) => d.id !== delivery.id);
+    set({ deliveries: [...deliveries, delivery] });
+  },
 }));

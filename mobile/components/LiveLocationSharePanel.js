@@ -20,26 +20,28 @@ export default function LiveLocationSharePanel({
     trackingUrl,
     latitude: location?.latitude,
     longitude: location?.longitude,
+    timestamp: location?.timestamp,
+    accuracy: location?.accuracy,
   };
 
   const handleCopy = async () => {
     const text = trackingUrl || (location ? buildMapsUrl(location.latitude, location.longitude) : '');
     const ok = await copyToClipboard(text);
-    setStatus(ok ? 'LINK COPIED TO CLIPBOARD' : 'COPY FAILED');
-    setTimeout(() => setStatus(null), 2500);
+    setStatus(ok ? 'Link copied.' : "Couldn't copy the link.");
+    setTimeout(() => setStatus(null), 4000);
   };
 
   const handleShare = async () => {
     setSharing(true);
     const result = await shareLiveLocation(payload);
     setSharing(false);
-    setStatus(result.success ? 'LOCATION SHARED' : 'SHARE CANCELLED');
-    setTimeout(() => setStatus(null), 2500);
+    setStatus(result.success ? 'Location shared.' : 'Sharing was cancelled.');
+    setTimeout(() => setStatus(null), 4000);
   };
 
   const handleWhatsAppAll = async () => {
     if (!contacts.length) {
-      setStatus('NO GUARDIAN CONTACTS REGISTERED');
+      setStatus('Add an emergency contact first.');
       return;
     }
     setSharing(true);
@@ -47,34 +49,34 @@ export default function LiveLocationSharePanel({
       await shareToContactWhatsApp(contact, payload);
     }
     setSharing(false);
-    setStatus(`WHATSAPP OPENED FOR ${contacts.length} CONTACT(S)`);
-    setTimeout(() => setStatus(null), 3000);
+    setStatus(`WhatsApp opened for ${contacts.length} ${contacts.length === 1 ? 'contact' : 'contacts'}.`);
+    setTimeout(() => setStatus(null), 4000);
   };
 
   return (
     <View style={styles.panel}>
       <View style={styles.header}>
-        <Feather name="navigation" size={16} color={tokens.color.primaryBright} />
-        <Text style={styles.title}>LIVE LOCATION SHARING</Text>
+        <Feather name="share-2" size={20} color={tokens.color.primary} />
+        <Text style={styles.title} accessibilityRole="header" aria-level={2}>
+          Share my location
+        </Text>
       </View>
 
-      <Text style={styles.subtitle}>
-        Broadcast your real-time coordinates to guardians via link or WhatsApp.
-      </Text>
+      <Text style={styles.subtitle}>Send a link so your contacts can see where you are.</Text>
 
       {location ? (
         <View style={styles.coordsBox}>
-          <Text style={styles.coordsLabel}>CURRENT FIX</Text>
+          <Text style={styles.coordsLabel}>Your current location</Text>
           <Text style={styles.coords}>
-            {location.latitude.toFixed(6)}, {location.longitude.toFixed(6)}
+            {location.latitude.toFixed(5)}, {location.longitude.toFixed(5)}
           </Text>
           <Text style={styles.meta}>
-            Accuracy ±{location.accuracy?.toFixed?.(0) ?? '—'}m · Updated{' '}
+            Accurate to about {location.accuracy?.toFixed?.(0) ?? '—'} m · Updated{' '}
             {new Date(location.timestamp).toLocaleTimeString()}
           </Text>
         </View>
       ) : (
-        <Text style={styles.waiting}>AWAITING GPS FIX…</Text>
+        <Text style={styles.waiting}>Finding your location…</Text>
       )}
 
       {trackingUrl ? (
@@ -83,27 +85,33 @@ export default function LiveLocationSharePanel({
         </Text>
       ) : null}
 
-      {status ? <Text style={styles.status}>{status}</Text> : null}
+      {status ? (
+        <Text style={styles.status} accessibilityLiveRegion="polite" role="status">
+          {status}
+        </Text>
+      ) : null}
 
       <View style={styles.actions}>
-        <AppButton label="COPY LIVE LINK" variant="ghost" onPress={handleCopy} disabled={!trackingUrl && !location} />
-        <AppButton label="SHARE LOCATION" variant="primary" onPress={handleShare} loading={sharing} disabled={!location} />
         <AppButton
-          label="SEND VIA WHATSAPP"
-          variant="critical"
+          label="Send on WhatsApp to all contacts"
+          variant="primary"
           onPress={handleWhatsAppAll}
           loading={sharing}
           disabled={!location || contacts.length === 0}
         />
+        <AppButton label="Share another way" variant="ghost" onPress={handleShare} loading={sharing} disabled={!location} />
+        <AppButton label="Copy link" variant="ghost" onPress={handleCopy} disabled={!trackingUrl && !location} />
       </View>
 
       {contacts.length > 0 ? (
         <View style={styles.contactList}>
-          <Text style={styles.contactTitle}>SHARE TO INDIVIDUAL GUARDIAN</Text>
+          <Text style={styles.contactTitle} accessibilityRole="header" aria-level={3}>
+            Send to one person
+          </Text>
           {contacts.map((contact) => (
             <AppButton
               key={contact.id}
-              label={`WHATSAPP · ${contact.name.toUpperCase()}`}
+              label={`WhatsApp ${contact.name}`}
               variant="ghost"
               onPress={() => shareToContactWhatsApp(contact, payload)}
               disabled={!location}
@@ -124,24 +132,22 @@ const styles = StyleSheet.create({
     padding: tokens.spacing.lg,
     marginBottom: tokens.spacing.md,
   },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: tokens.spacing.sm },
-  title: { ...tokens.typography.caption, color: tokens.color.primaryBright },
-  subtitle: { color: tokens.color.textMuted, fontSize: 12, lineHeight: 18, marginBottom: tokens.spacing.md },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: tokens.spacing.sm },
+  title: { ...tokens.typography.title, color: tokens.color.text },
+  subtitle: { color: tokens.color.textMuted, fontSize: 15, lineHeight: 22, marginBottom: tokens.spacing.md },
   coordsBox: {
-    backgroundColor: tokens.color.bg2,
+    backgroundColor: tokens.color.primarySoft,
     borderRadius: tokens.radius.md,
     padding: tokens.spacing.md,
     marginBottom: tokens.spacing.sm,
-    borderWidth: 1,
-    borderColor: tokens.color.border,
   },
-  coordsLabel: { ...tokens.typography.caption, color: tokens.color.textSubtle, fontSize: 9 },
-  coords: { color: tokens.color.text, fontWeight: '800', fontFamily: 'monospace', marginTop: 4, fontSize: 13 },
-  meta: { color: tokens.color.textSubtle, fontSize: 10, marginTop: 6 },
-  waiting: { color: tokens.color.textSubtle, marginBottom: tokens.spacing.sm, fontSize: 12 },
-  trackUrl: { ...tokens.typography.mono, color: tokens.color.primaryLight, fontSize: 10, marginBottom: tokens.spacing.sm },
-  status: { color: tokens.color.primaryBright, fontWeight: '700', fontSize: 11, marginBottom: tokens.spacing.sm, letterSpacing: 0.4 },
+  coordsLabel: { color: tokens.color.textMuted, fontSize: 14 },
+  coords: { color: tokens.color.text, fontWeight: '700', marginTop: 4, fontSize: 17 },
+  meta: { color: tokens.color.textSubtle, fontSize: 14, marginTop: 4, lineHeight: 20 },
+  waiting: { color: tokens.color.textMuted, marginBottom: tokens.spacing.sm, fontSize: 15 },
+  trackUrl: { ...tokens.typography.mono, color: tokens.color.primary, marginBottom: tokens.spacing.sm },
+  status: { color: tokens.color.success, fontWeight: '700', fontSize: 15, marginBottom: tokens.spacing.sm },
   actions: { gap: tokens.spacing.sm },
   contactList: { marginTop: tokens.spacing.md, gap: tokens.spacing.sm },
-  contactTitle: { ...tokens.typography.caption, color: tokens.color.textSubtle, fontSize: 9, marginBottom: 4 },
+  contactTitle: { color: tokens.color.text, fontWeight: '700', fontSize: 16, marginBottom: 4 },
 });

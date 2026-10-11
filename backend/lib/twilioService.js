@@ -1,161 +1,94 @@
+const crypto = require('crypto');
 const twilio = require('twilio');
-const { resolvePublicServerUrl } = require('./serverUrl');
 
-function createTwilioClient() {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const fromNumber = process.env.TWILIO_PHONE_NUMBER;
+function sha256(text) {
+  return crypto.createHash('sha256').update(String(text)).digest('hex');
+}
 
-  if (!accountSid || !authToken || !fromNumber) {
-    console.warn('[Twilio] Missing credentials — voice/SMS will be logged only.');
-    return null;
+function buildTrackingUrl(publicServerUrl, sessionId, trackerToken) {
+  const base = String(publicServerUrl || '').replace(/\/$/, '');
+  return `${base}/track/${encodeURIComponent(sessionId)}?t=${encodeURIComponent(trackerToken)}`;
+}
+
+function maskPhone(phone) {
+  const s = String(phone || '');
+  return s.length > 4 ? `${'*'.repeat(Math.max(0, s.length - 4))}${s.slice(-4)}` : '****';
+}
+
+class ProviderConfigError extends Error {
+  constructor(message) {
+    super(message);
+    this.code = 'PROVIDER_CONFIG';
+  }
+}
+
+/**
+ * transient: the provider definitively did not accept the request (429/5xx) - safe to retry.
+ * permanent: the provider rejected the request (other 4xx, bad config) - do not retry.
+ * ambiguous: no provider response (network error/timeout) - the message may or may not exist.
+ */
+function classifyProviderError(err) {
+  if (err instanceof ProviderConfigError) return 'permanent';
+  const status = Number(err?.status);
+  if (Number.isFinite(status) && status > 0) {
+    if (status === 429 || status >= 500) return 'transient';
+    return 'permanent';
+  }
+  return 'ambiguous';
+}
+
+function createTwilioProvider(twilioConfig, { twilioFactory = twilio } = {}) {
+  if (!twilioConfig?.configured) return null;
+  const client = twilioFactory(twilioConfig.accountSid, twilioConfig.authToken);
+  const fromNumber = twilioConfig.fromNumber;
+  const whatsappFrom = twilioConfig.whatsappFrom;
+
+  function addresses(channel, to) {
+    if (channel === 'whatsapp') {
+      if (!whatsappFrom) throw new ProviderConfigError('TWILIO_WHATSAPP_NUMBER is not configured');
+      return { from: `whatsapp:${whatsappFrom}`, to: `whatsapp:${to}` };
+    }
+    return { from: fromNumber, to };
   }
 
   return {
-    client: twilio(accountSid, authToken),
-    fromNumber,
+    name: 'twilio',
+
+    async send({ channel, to, body, twiml, statusCallback }) {
+      if (channel === 'voice') {
+        const call = await client.calls.create({ from: fromNumber, to, twiml, timeout: 30 });
+        return { sid: call.sid, status: call.status || 'queued' };
+      }
+      const params = { ...addresses(channel, to), body };
+      if (statusCallback) params.statusCallback = statusCallback;
+      const msg = await client.messages.create(params);
+      return { sid: msg.sid, status: msg.status };
+    },
+
+    /** Looks for a message we may already have created, so an ambiguous failure is not resent. */
+    async findRecentMessage({ channel, to, bodySha256, sinceMs }) {
+      if (channel === 'voice') return { supported: false, match: null };
+      const { from, to: toAddress } = addresses(channel, to);
+      const list = await client.messages.list({ to: toAddress, from, limit: 20 });
+      const windowStart = sinceMs - 60 * 1000;
+      const match = list.find(
+        (m) => new Date(m.dateCreated).getTime() >= windowStart && sha256(m.body) === bodySha256
+      );
+      return { supported: true, match: match ? { sid: match.sid, status: match.status } : null };
+    },
+
+    validateWebhook({ signature, url, params }) {
+      if (!signature) return false;
+      return twilio.validateRequest(twilioConfig.authToken, signature, url, params);
+    },
   };
 }
 
-function buildTrackingUrl(sessionId) {
-  const base = resolvePublicServerUrl();
-  return `${base}/track/${sessionId}`;
-}
-
-function buildEmergencyMessage(session) {
-  const trackUrl = buildTrackingUrl(session.sessionId);
-  const loc = session.location;
-  const coords = loc
-    ? `${loc.latitude.toFixed(6)}, ${loc.longitude.toFixed(6)}`
-    : 'Location unavailable';
-
-  return [
-    'SOS-Vidha EMERGENCY ALERT',
-    `Contact: ${session.userPhone}`,
-    `Reason: ${session.emergencyReason || 'Safety alert triggered'}`,
-    `Live location: ${coords}`,
-    `Track live: ${trackUrl}`,
-    'Please attempt to reach them immediately.',
-  ].join('\n');
-}
-
-function buildVoiceTwiml(session) {
-  const trackUrl = buildTrackingUrl(session.sessionId);
-  const loc = session.location;
-  const coords = loc
-    ? `latitude ${loc.latitude.toFixed(4)}, longitude ${loc.longitude.toFixed(4)}`
-    : 'location currently unavailable';
-
-  const message = [
-    'This is an automated emergency alert from SOS Vidha.',
-    `A safety alert has been triggered for phone number ending in ${session.userPhone.slice(-4)}.`,
-    `Last known coordinates: ${coords}.`,
-    `Open the live tracking link sent via text message: ${trackUrl}.`,
-    'Please try to contact them immediately.',
-    'Repeating.',
-    'This is an automated emergency alert from SOS Vidha.',
-    `Last known coordinates: ${coords}.`,
-    'Please try to contact them immediately.',
-  ].join(' ');
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="alice" language="en-US">${escapeXml(message)}</Say>
-  <Pause length="2"/>
-  <Say voice="alice" language="en-US">${escapeXml(message)}</Say>
-</Response>`;
-}
-
-function escapeXml(str) {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
-async function notifyEmergencyContacts(twilioBundle, session) {
-  const contacts = [session.contact1, session.contact2].filter(Boolean);
-  const body = buildEmergencyMessage(session);
-  const twiml = buildVoiceTwiml(session);
-  const results = { sms: [], calls: [] };
-
-  if (!twilioBundle) {
-    console.log('[Twilio:DRY-RUN] Emergency notification');
-    console.log('Contacts:', contacts);
-    console.log('SMS body:\n', body);
-    console.log('TwiML:\n', twiml);
-    return results;
-  }
-
-  const { client, fromNumber } = twilioBundle;
-
-  for (const to of contacts) {
-    try {
-      const sms = await client.messages.create({
-        from: fromNumber,
-        to,
-        body,
-      });
-      results.sms.push({ to, sid: sms.sid, status: 'sent' });
-    } catch (err) {
-      console.error(`[Twilio] SMS failed for ${to}:`, err.message);
-      results.sms.push({ to, status: 'failed', error: err.message });
-    }
-
-    try {
-      const call = await client.calls.create({
-        from: fromNumber,
-        to,
-        twiml,
-        machineDetection: 'Enable',
-        timeout: 30,
-      });
-      results.calls.push({ to, sid: call.sid, status: 'initiated' });
-    } catch (err) {
-      console.error(`[Twilio] Call failed for ${to}:`, err.message);
-      results.calls.push({ to, status: 'failed', error: err.message });
-    }
-  }
-
-  return results;
-}
-
-async function notifyWhatsAppContacts(twilioBundle, contacts, message) {
-  const whatsappFrom = process.env.TWILIO_WHATSAPP_NUMBER;
-  const results = [];
-
-  if (!twilioBundle || !whatsappFrom) {
-    console.log('[Twilio:DRY-RUN] WhatsApp notification');
-    contacts.forEach((to) => console.log(`  -> whatsapp:${to}\n${message}`));
-    return contacts.map((to) => ({ to, status: 'dry-run' }));
-  }
-
-  const { client } = twilioBundle;
-
-  for (const to of contacts) {
-    try {
-      const msg = await client.messages.create({
-        from: `whatsapp:${whatsappFrom}`,
-        to: `whatsapp:${to}`,
-        body: message,
-      });
-      results.push({ to, sid: msg.sid, status: 'sent' });
-    } catch (err) {
-      console.error(`[Twilio] WhatsApp failed for ${to}:`, err.message);
-      results.push({ to, status: 'failed', error: err.message });
-    }
-  }
-
-  return results;
-}
-
 module.exports = {
-  createTwilioClient,
+  sha256,
   buildTrackingUrl,
-  buildEmergencyMessage,
-  buildVoiceTwiml,
-  notifyEmergencyContacts,
-  notifyWhatsAppContacts,
+  maskPhone,
+  classifyProviderError,
+  createTwilioProvider,
+  ProviderConfigError,
 };

@@ -16,27 +16,25 @@ const ActivityType = {
 };
 
 let watchId = null;
-let deterministicBase = { latitude: 28.6139, longitude: 77.209, tick: 0 };
 
-function simulateCoordinate() {
-  deterministicBase.tick += 1;
-  const t = deterministicBase.tick * 0.00008;
-  return {
-    latitude: deterministicBase.latitude + Math.sin(t) * 0.0012,
-    longitude: deterministicBase.longitude + Math.cos(t) * 0.0012,
-  };
+const GEO_ERROR_CODES = { 1: 'PERMISSION_DENIED', 2: 'POSITION_UNAVAILABLE', 3: 'TIMEOUT' };
+
+function locationError(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
 }
 
-function toLocationObject(coords, timestamp = Date.now()) {
+function toLocationObject(coords, timestamp) {
   return {
     coords: {
       latitude: coords.latitude,
       longitude: coords.longitude,
-      altitude: coords.altitude ?? 216,
-      accuracy: coords.accuracy ?? 12,
-      altitudeAccuracy: null,
-      heading: coords.heading ?? 90,
-      speed: coords.speed ?? 1.4,
+      altitude: coords.altitude ?? null,
+      accuracy: coords.accuracy ?? null,
+      altitudeAccuracy: coords.altitudeAccuracy ?? null,
+      heading: coords.heading ?? null,
+      speed: coords.speed ?? null,
     },
     timestamp,
   };
@@ -44,31 +42,31 @@ function toLocationObject(coords, timestamp = Date.now()) {
 
 function getWebPosition(options = {}) {
   return new Promise((resolve, reject) => {
-    if (typeof navigator !== 'undefined' && navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => resolve(toLocationObject({
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-          altitude: pos.coords.altitude,
-          accuracy: pos.coords.accuracy,
-          heading: pos.coords.heading,
-          speed: pos.coords.speed,
-        }, pos.timestamp)),
-        () => {
-          const sim = simulateCoordinate();
-          resolve(toLocationObject(sim));
-        },
-        { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
-      );
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      reject(locationError('UNSUPPORTED', 'This browser cannot provide a GPS location.'));
       return;
     }
-
-    const sim = simulateCoordinate();
-    resolve(toLocationObject(sim));
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve(toLocationObject(pos.coords, pos.timestamp)),
+      (err) =>
+        reject(locationError(GEO_ERROR_CODES[err?.code] || 'POSITION_UNAVAILABLE', err?.message || 'Location unavailable')),
+      { enableHighAccuracy: true, timeout: options.timeout ?? 8000, maximumAge: 0 }
+    );
   });
 }
 
 export async function requestForegroundPermissionsAsync() {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) {
+    return { status: 'denied', granted: false, canAskAgain: false };
+  }
+  try {
+    const result = await navigator.permissions?.query({ name: 'geolocation' });
+    if (result?.state === 'denied') {
+      return { status: 'denied', granted: false, canAskAgain: false };
+    }
+  } catch {
+    /* Permissions API unavailable; the browser prompts on first use. */
+  }
   return { status: 'granted', granted: true, canAskAgain: true };
 }
 

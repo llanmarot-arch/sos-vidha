@@ -1,12 +1,13 @@
 import { useEffect, useRef, useCallback } from 'react';
 import * as Haptics from 'expo-haptics';
 import { apiClient } from '../services/apiClient';
-import { buildSessionPinPayload } from '../utils/pinCrypto';
+import { classifyLocationError, isFinalDeliveryStatus } from '../services/apiClientPolicy';
 import { useSOSFlowStore } from '../store/useSOSFlowStore';
+import { useIncidentStore } from '../store/useIncidentStore';
 import { useContactsStore } from '../store/useContactsStore';
 import { useBlackBoxStore } from '../store/useBlackBoxStore';
 import { SOS_STATES } from '../theme/tokens';
-import { connectSocket, emitTriggerEmergency, disconnectSocket } from '../services/socketService';
+import { connectSocket, disconnectSocket } from '../services/socketService';
 import {
   startLiveTracking,
   stopLiveTracking,
@@ -14,14 +15,27 @@ import {
   setStreamSessionId,
 } from '../services/webLocationService';
 import { dispatchWhatsAppAlerts } from '../services/whatsappAlertService';
+import { isSupabaseConfigured } from '../lib/supabaseClient';
+import { useAuthStore } from '../store/useAuthStore';
 
 const ABORT_SECONDS = 3;
-const DEMO_STANDARD_PIN = '1234';
-const DEMO_DURESS_PIN = '9999';
+const GPS_TIMEOUT_MS = 6000;
+const ALERT_POLL_INTERVAL_MS = 5000;
+const ALERT_POLL_MAX_MS = 3 * 60 * 1000;
+
+async function captureLocation() {
+  try {
+    const location = await getCurrentPosition({ timeoutMs: GPS_TIMEOUT_MS });
+    return { location, locationError: null };
+  } catch (err) {
+    return { location: null, locationError: err?.code || classifyLocationError(err) };
+  }
+}
 
 export function useSOSDispatch() {
   const countdownTimer = useRef(null);
   const dispatchRef = useRef(null);
+  const alertPollTimer = useRef(null);
 
   const clearCountdownTimer = useCallback(() => {
     if (countdownTimer.current) {
@@ -30,72 +44,162 @@ export function useSOSDispatch() {
     }
   }, []);
 
+  const stopAlertPolling = useCallback(() => {
+    if (alertPollTimer.current) {
+      clearInterval(alertPollTimer.current);
+      alertPollTimer.current = null;
+    }
+  }, []);
+
   useEffect(
     () => () => {
       clearCountdownTimer();
+      stopAlertPolling();
       stopLiveTracking();
       disconnectSocket();
       useBlackBoxStore.getState().stopRecording();
     },
-    [clearCountdownTimer]
+    [clearCountdownTimer, stopAlertPolling]
+  );
+
+  const refreshAlertStatus = useCallback(async (sessionId) => {
+    try {
+      const status = await apiClient.getAlertStatus(sessionId);
+      if (useSOSFlowStore.getState().sessionId !== sessionId) return true;
+      useSOSFlowStore.getState().setAlertStatus(status);
+      const deliveries = status.deliveries || [];
+      return deliveries.length > 0 && deliveries.every((d) => isFinalDeliveryStatus(d.status));
+    } catch {
+      useSOSFlowStore
+        .getState()
+        .setAlertStatusError('Could not refresh message status. Your SOS is still active on the server.');
+      return false;
+    }
+  }, []);
+
+  const startAlertPolling = useCallback(
+    (sessionId) => {
+      stopAlertPolling();
+      const startedAt = Date.now();
+      refreshAlertStatus(sessionId);
+      alertPollTimer.current = setInterval(async () => {
+        const done = await refreshAlertStatus(sessionId);
+        if (done || Date.now() - startedAt > ALERT_POLL_MAX_MS) stopAlertPolling();
+      }, ALERT_POLL_INTERVAL_MS);
+    },
+    [refreshAlertStatus, stopAlertPolling]
+  );
+
+  /** Runs once the server has confirmed the incident; from here later failures must not reset the alert. */
+  const startServerFollowUp = useCallback(
+    async (session, record) => {
+      if (useSOSFlowStore.getState().sessionId === session.sessionId) return;
+      const contacts = useContactsStore.getState().contacts;
+      const fix = record?.location?.status === 'FIX' ? record.location : null;
+      useSOSFlowStore.getState().setSession(session.sessionId, session.trackingUrl, session.disarmToken, {
+        activatedAt: session.activatedAt,
+        alertLocation: session.location,
+        alertsMode: session.alerts?.mode,
+        localIncidentId: record?.id,
+      });
+      useSOSFlowStore.getState().transition(SOS_STATES.ACTIVE_ALERT);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+      startAlertPolling(session.sessionId);
+
+      const failed = [];
+      try {
+        setStreamSessionId(session.sessionId);
+        await connectSocket(session.sessionId, {
+          onAlertStatus: (data) => {
+            if (data?.sessionId === useSOSFlowStore.getState().sessionId) {
+              useSOSFlowStore.getState().upsertDelivery(data.delivery);
+            }
+          },
+        });
+      } catch {
+        failed.push('the live connection');
+      }
+      try {
+        await startLiveTracking(session.sessionId);
+      } catch {
+        failed.push('live location updates');
+      }
+      try {
+        await useBlackBoxStore.getState().startRecording();
+      } catch {
+        failed.push('audio recording');
+      }
+      if (failed.length) {
+        useSOSFlowStore
+          .getState()
+          .setFollowUpError(
+            `Your SOS is recorded, but ${failed.join(', ')} could not start. Call your contacts or 112 if you can.`
+          );
+      }
+
+      dispatchWhatsAppAlerts(contacts, {
+        sessionId: session.sessionId,
+        trackingUrl: session.trackingUrl,
+        latitude: fix?.latitude,
+        longitude: fix?.longitude,
+        timestamp: fix?.capturedAt,
+        accuracy: fix?.accuracyM,
+      }).catch(() => {});
+    },
+    [startAlertPolling]
   );
 
   const dispatchSOS = useCallback(async () => {
-    useSOSFlowStore.getState().transition(SOS_STATES.DISPATCHING);
+    const flow = useSOSFlowStore.getState();
+    flow.transition(SOS_STATES.DISPATCHING);
     clearCountdownTimer();
 
-    try {
-      await apiClient.healthCheck();
-      const contacts = useContactsStore.getState().contacts;
-      if (contacts.length < 1) throw new Error('ADD AT LEAST ONE GUARDIAN CONTACT');
-
-      let location = { latitude: 28.6139, longitude: 77.209 };
-      try {
-        location = await getCurrentPosition();
-      } catch {
-        /* fallback coords */
-      }
-
-      const primary = contacts[0];
-      const secondary = contacts[1] || contacts[0];
-
-      const pinPayload = await buildSessionPinPayload(DEMO_STANDARD_PIN, DEMO_DURESS_PIN);
-      const session = await apiClient.startSession({
-        mode: 'GEOFENCE',
-        userPhone: '+919999999999',
-        contact1: primary.phone,
-        contact2: secondary.phone,
-        pinSalt: pinPayload.pinSalt,
-        standardPinHash: pinPayload.standardPinHash,
-        duressPinHash: pinPayload.duressPinHash,
-        geofence: {
-          center: { latitude: location.latitude, longitude: location.longitude },
-          radiusMeters: 500,
-        },
-        initialLocation: location,
-      });
-
-      useSOSFlowStore.getState().setSession(session.sessionId, session.trackingUrl);
-      useSOSFlowStore.getState().transition(SOS_STATES.ACTIVE_ALERT);
-
-      setStreamSessionId(session.sessionId);
-      connectSocket(session.sessionId);
-      emitTriggerEmergency(session.sessionId, 'WEB_SOS_HOLD');
-      await startLiveTracking(session.sessionId);
-      await useBlackBoxStore.getState().startRecording();
-
-      await dispatchWhatsAppAlerts(contacts, {
-        sessionId: session.sessionId,
-        trackingUrl: session.trackingUrl,
-        latitude: location.latitude,
-        longitude: location.longitude,
-      });
-
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-    } catch (err) {
-      useSOSFlowStore.getState().setDispatchError(err.message || 'DISPATCH FAILED');
+    if (isSupabaseConfigured() && !useAuthStore.getState().session) {
+      flow.setDispatchError('Sign in to activate SOS with your account.');
+      return;
     }
-  }, [clearCountdownTimer]);
+
+    const incidents = useIncidentStore.getState();
+    const contacts = useContactsStore.getState().contacts;
+    // Saved on the phone before any network call, so the SOS survives no signal, a crash or a restart.
+    let record = await incidents.findReusableUnsent().catch(() => null);
+    try {
+      if (!record) {
+        record = await incidents.createIncident({ contacts });
+      }
+    } catch {
+      flow.setDispatchError(
+        'This phone could not save the SOS, so it was not sent. Call 112 or your contacts directly now.'
+      );
+      return;
+    }
+    if (record.location?.status !== 'FIX') {
+      await incidents.setLocation(record.id, await captureLocation());
+    }
+
+    const result = await incidents.sync(record.id);
+    if (!result?.session) {
+      // Not confirmed by the server. The incident stays queued and its honest status is shown separately.
+      useSOSFlowStore.getState().reset();
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+      return;
+    }
+    await startServerFollowUp(result.session, result.record);
+  }, [clearCountdownTimer, startServerFollowUp]);
+
+  useEffect(() => {
+    useIncidentStore.getState().init();
+    const adopt = () => {
+      if (!useIncidentStore.getState().pendingSession) return;
+      const { sosState } = useSOSFlowStore.getState();
+      const pending = useIncidentStore.getState().consumePendingSession();
+      if (pending && (sosState === SOS_STATES.IDLE || sosState === SOS_STATES.DISPATCHING)) {
+        startServerFollowUp(pending.session, pending.record);
+      }
+    };
+    adopt();
+    return useIncidentStore.subscribe(adopt);
+  }, [startServerFollowUp]);
 
   dispatchRef.current = dispatchSOS;
 
@@ -121,15 +225,26 @@ export function useSOSDispatch() {
   }, [clearCountdownTimer]);
 
   const cancelAlert = useCallback(async () => {
-    const { sessionId } = useSOSFlowStore.getState();
-    if (sessionId) {
-      await apiClient.disarmSession({ sessionId, method: 'BIOMETRIC', disarmToken: 'web-demo' }).catch(() => {});
+    const { sessionId, disarmToken, localIncidentId } = useSOSFlowStore.getState();
+    if (sessionId && disarmToken) {
+      try {
+        await apiClient.disarmSession({ sessionId, method: 'BIOMETRIC', disarmToken });
+      } catch {
+        useSOSFlowStore
+          .getState()
+          .setFollowUpError(
+            'Could not stop the SOS on the server. Your contacts may still be alerted. Check your connection and try again.'
+          );
+        return;
+      }
+      if (localIncidentId) useIncidentStore.getState().close(localIncidentId, 'DISARMED').catch(() => {});
     }
+    stopAlertPolling();
     useBlackBoxStore.getState().stopRecording();
     stopLiveTracking();
     disconnectSocket();
     useSOSFlowStore.getState().reset();
-  }, []);
+  }, [stopAlertPolling]);
 
   return { beginCountdown, abortCountdown, cancelAlert, dispatchSOS };
 }

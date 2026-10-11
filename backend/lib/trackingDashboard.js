@@ -16,23 +16,27 @@ function mapDisplayStatus(status) {
 }
 
 function renderTrackingDashboard(sessionId, session, options = {}) {
-  const publicUrl = resolvePublicServerUrl(options.port);
+  const trackerTokenForSocket = options.trackerToken || '';
+  const useSecureSocket = Boolean(options.secureTracking);
+  const publicUrl = options.publicUrl || resolvePublicServerUrl(options.port);
+  const staleAfterMs = options.staleAfterMs || 120000;
   const mapboxToken = process.env.MAPBOX_ACCESS_TOKEN || '';
   const loc = session.location;
-  const initialLat = loc?.latitude ?? 20.5937;
-  const initialLng = loc?.longitude ?? 78.9629;
   const displayStatus = mapDisplayStatus(session.status);
   const speedKmh = loc?.speed != null ? (loc.speed * 3.6).toFixed(1) : '—';
   const battery = loc?.batteryLevel != null ? Math.round(loc.batteryLevel * 100) : '—';
-  const lastFix = session.lastLocationUpdate
-    ? new Date(session.lastLocationUpdate).toLocaleString()
-    : 'Waiting for GPS…';
+  const lastFix = loc?.timestamp
+    ? new Date(loc.timestamp).toLocaleString()
+    : 'No GPS fix received';
+  const accuracy = loc?.accuracy != null ? `±${Math.round(loc.accuracy)} m` : 'Not reported';
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="referrer" content="strict-origin"/>
+  <meta name="robots" content="noindex, nofollow"/>
   <title>SOS-Vidha · Live Guardian Track</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -115,22 +119,34 @@ function renderTrackingDashboard(sessionId, session, options = {}) {
       <div class="value" id="batteryValue">${battery}${battery !== '—' ? '%' : ''}</div>
     </div>
     <div class="card full">
-      <div class="label">Last GPS Fix</div>
+      <div class="label">Last GPS fix (device time)</div>
       <div class="value" id="lastFixValue">${lastFix}</div>
+      <div class="label" id="staleNote" style="margin-top:6px;color:#F59E0B"></div>
     </div>
-    <div class="card full">
+    <div class="card">
+      <div class="label">Accuracy</div>
+      <div class="value" id="accuracyValue">${accuracy}</div>
+    </div>
+    <div class="card">
       <div class="label">Coordinates</div>
-      <div class="value" id="coordsValue">${loc ? `${loc.latitude.toFixed(6)}, ${loc.longitude.toFixed(6)}` : 'Awaiting fix…'}</div>
+      <div class="value" id="coordsValue">${loc ? `${loc.latitude.toFixed(5)}, ${loc.longitude.toFixed(5)}` : 'Location unavailable'}</div>
     </div>
   </div>
   <div class="footer">Connected to ${publicUrl}</div>
   <script>
     const sessionId = ${JSON.stringify(sessionId)};
     const mapboxToken = ${JSON.stringify(mapboxToken)};
-    let lat = ${initialLat};
-    let lng = ${initialLng};
+    const staleAfterMs = ${Number(staleAfterMs)};
+    const initialLocation = ${JSON.stringify(
+      loc ? { latitude: loc.latitude, longitude: loc.longitude, timestamp: loc.timestamp } : null
+    )};
 
-    const map = L.map('map', { zoomControl: true }).setView([lat, lng], 15);
+    const map = L.map('map', { zoomControl: true });
+    if (initialLocation) {
+      map.setView([initialLocation.latitude, initialLocation.longitude], 15);
+    } else {
+      map.setView([0, 0], 2);
+    }
 
     if (mapboxToken) {
       L.tileLayer('https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=' + mapboxToken, {
@@ -140,9 +156,9 @@ function renderTrackingDashboard(sessionId, session, options = {}) {
         maxZoom: 20,
       }).addTo(map);
     } else {
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '© OpenStreetMap © CARTO',
-        maxZoom: 20,
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+        maxZoom: 19,
       }).addTo(map);
     }
 
@@ -153,9 +169,39 @@ function renderTrackingDashboard(sessionId, session, options = {}) {
       iconAnchor: [9, 9],
     });
 
-    let marker = L.marker([lat, lng], { icon: markerIcon }).addTo(map);
-    let trail = L.polyline([[lat, lng]], { color: '#10B981', weight: 3, opacity: 0.7 }).addTo(map);
-    const trailPoints = [[lat, lng]];
+    let marker = null;
+    let trail = null;
+    const trailPoints = [];
+    let latestFixTime = initialLocation ? initialLocation.timestamp : null;
+
+    function plot(lat, lng) {
+      if (!marker) {
+        marker = L.marker([lat, lng], { icon: markerIcon }).addTo(map);
+        trail = L.polyline([], { color: '#10B981', weight: 3, opacity: 0.7 }).addTo(map);
+        map.setView([lat, lng], 15);
+      }
+      marker.setLatLng([lat, lng]);
+      trailPoints.push([lat, lng]);
+      if (trailPoints.length > 200) trailPoints.shift();
+      trail.setLatLngs(trailPoints);
+      map.panTo([lat, lng], { animate: true, duration: 0.5 });
+    }
+
+    function refreshStaleNote() {
+      const note = document.getElementById('staleNote');
+      if (!latestFixTime) {
+        note.textContent = 'No GPS fix has been received from the device.';
+        return;
+      }
+      const ageMs = Date.now() - latestFixTime;
+      note.textContent = ageMs > staleAfterMs
+        ? 'Stale: this fix is ' + Math.round(ageMs / 60000) + ' min old and may not show the current position.'
+        : '';
+    }
+
+    if (initialLocation) plot(initialLocation.latitude, initialLocation.longitude);
+    refreshStaleNote();
+    setInterval(refreshStaleNote, 15000);
 
     function mapStatus(s) {
       if (s === 'MONITORING') return 'NORMAL';
@@ -164,34 +210,40 @@ function renderTrackingDashboard(sessionId, session, options = {}) {
     }
 
     function updateHud(payload) {
-      const loc = payload.location;
-      if (!loc) return;
-
-      lat = loc.latitude;
-      lng = loc.longitude;
-      marker.setLatLng([lat, lng]);
-      trailPoints.push([lat, lng]);
-      if (trailPoints.length > 200) trailPoints.shift();
-      trail.setLatLngs(trailPoints);
-      map.panTo([lat, lng], { animate: true, duration: 0.5 });
-
-      document.getElementById('coordsValue').textContent = lat.toFixed(6) + ', ' + lng.toFixed(6);
-      document.getElementById('speedValue').textContent =
-        loc.speed != null ? (loc.speed * 3.6).toFixed(1) + ' km/h' : '—';
-      document.getElementById('batteryValue').textContent =
-        loc.batteryLevel != null ? Math.round(loc.batteryLevel * 100) + '%' : '—';
-      document.getElementById('lastFixValue').textContent =
-        loc.timestamp ? new Date(loc.timestamp).toLocaleString() : new Date().toLocaleString();
-
       const display = mapStatus(payload.status);
       const pill = document.getElementById('statusPill');
       pill.className = 'status-pill status-' + display;
       document.getElementById('statusText').textContent = display;
+
+      const loc = payload.location;
+      if (!loc || loc.timestamp == null) return;
+
+      plot(loc.latitude, loc.longitude);
+      latestFixTime = loc.timestamp;
+      refreshStaleNote();
+
+      document.getElementById('coordsValue').textContent =
+        loc.latitude.toFixed(5) + ', ' + loc.longitude.toFixed(5);
+      document.getElementById('accuracyValue').textContent =
+        loc.accuracy != null ? '±' + Math.round(loc.accuracy) + ' m' : 'Not reported';
+      document.getElementById('speedValue').textContent =
+        loc.speed != null ? (loc.speed * 3.6).toFixed(1) + ' km/h' : '—';
+      document.getElementById('batteryValue').textContent =
+        loc.batteryLevel != null ? Math.round(loc.batteryLevel * 100) + '%' : '—';
+      document.getElementById('lastFixValue').textContent = new Date(loc.timestamp).toLocaleString();
     }
 
-    const socket = io({ transports: ['websocket', 'polling'] });
+    const socketAuth = ${JSON.stringify(
+      useSecureSocket
+        ? { trackerToken: trackerTokenForSocket, sessionId }
+        : { sessionId }
+    )};
+    const socket = io({ transports: ['websocket', 'polling'], auth: socketAuth });
     socket.on('connect', () => {
-      socket.emit('join-tracker', { sessionId });
+      socket.emit('join-tracker', {
+        sessionId,
+        trackerToken: ${JSON.stringify(trackerTokenForSocket || null)},
+      });
     });
     socket.on('TRACKER_SNAPSHOT', (data) => updateHud(data));
     socket.on('LOCATION_UPDATE', (data) => updateHud(data));
@@ -200,6 +252,14 @@ function renderTrackingDashboard(sessionId, session, options = {}) {
       const display = mapStatus(data.status);
       pill.className = 'status-pill status-' + display;
       document.getElementById('statusText').textContent = display;
+    });
+    socket.on('TRACKING_ENDED', () => {
+      document.getElementById('statusText').textContent = 'TRACKING ENDED';
+      document.getElementById('staleNote').textContent = 'This tracking link is no longer active.';
+      socket.disconnect();
+    });
+    socket.on('ERROR', () => {
+      document.getElementById('staleNote').textContent = 'This tracking link is invalid or has expired.';
     });
   </script>
 </body>

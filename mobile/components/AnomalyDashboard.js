@@ -34,27 +34,35 @@ export default function AnomalyDashboard({ onAutoTrigger }) {
 
   return (
     <View style={styles.panel}>
-      <Text style={styles.title}>VITAL ANOMALY DETECTOR</Text>
+      <Text style={styles.title} accessibilityRole="header" aria-level={2}>
+        Fall and crash detection
+      </Text>
+      <Text style={styles.desc}>If a hard fall or crash is detected, SOS starts automatically unless you cancel.</Text>
 
       <View style={styles.grid}>
-        <Tile label="G-FORCE MAG" value={`${magnitude} G`} alert={parseFloat(magnitude) > 3} />
-        <Tile label="HEART RATE" value={`${heartRate} BPM`} alert={heartRate > 120} />
-        <Tile label="SpO2" value={`${spO2}%`} alert={spO2 < 92} />
-        <Tile label="STATUS" value={state} alert={state !== ANOMALY_STATES.NORMAL} />
+        <Tile label="Movement" value={`${magnitude} G`} alert={parseFloat(magnitude) > 3} />
+        <Tile label="Heart rate" value={`${heartRate} bpm`} alert={heartRate > 120} />
+        <Tile label="Oxygen" value={`${spO2}%`} alert={spO2 < 92} />
+        <Tile
+          label="Status"
+          value={state === ANOMALY_STATES.NORMAL ? 'Normal' : 'Check needed'}
+          alert={state !== ANOMALY_STATES.NORMAL}
+        />
       </View>
 
       {state === ANOMALY_STATES.COUNTDOWN ? (
-        <View style={styles.countdownBox}>
-          <Text style={styles.countdownLabel}>HAZARD COUNTDOWN ACTIVE</Text>
-          <Text style={styles.countdownValue}>{countdown}s</Text>
-          <AppButton label="ABORT AUTO-SOS" variant="ghost" onPress={abortCountdown} />
+        <View style={styles.countdownBox} accessibilityRole="alert" accessibilityLiveRegion="assertive">
+          <Text style={styles.countdownLabel}>Possible fall detected. Sending SOS in</Text>
+          <Text style={styles.countdownValue}>{countdown} seconds</Text>
+          <AppButton label="I'm OK, cancel" variant="ghost" onPress={abortCountdown} />
         </View>
       ) : (
         <AppButton
-          label="SIMULATE IMPACT FORCE"
-          variant="critical"
+          label="Test fall detection"
+          variant="ghost"
           onPress={() => simulateImpact(onAutoTrigger)}
           disabled={state !== ANOMALY_STATES.NORMAL}
+          accessibilityHint="Simulates a fall. SOS will start after a countdown unless you cancel."
         />
       )}
     </View>
@@ -65,7 +73,10 @@ function Tile({ label, value, alert }) {
   return (
     <View style={[styles.tile, alert && styles.tileAlert]}>
       <Text style={styles.tileLabel}>{label}</Text>
-      <Text style={[styles.tileValue, alert && styles.tileValueAlert]}>{value}</Text>
+      <Text style={[styles.tileValue, alert && styles.tileValueAlert]}>
+        {value}
+        {alert ? ' (high)' : ''}
+      </Text>
     </View>
   );
 }
@@ -77,23 +88,24 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: tokens.color.border,
     padding: tokens.spacing.lg,
-    marginTop: tokens.spacing.lg,
+    marginTop: tokens.spacing.sm,
   },
-  title: { ...tokens.typography.caption, color: tokens.color.primaryBright, marginBottom: tokens.spacing.md },
+  title: { ...tokens.typography.title, color: tokens.color.text, marginBottom: 4 },
+  desc: { color: tokens.color.textMuted, fontSize: 15, lineHeight: 22, marginBottom: tokens.spacing.md },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: tokens.spacing.sm, marginBottom: tokens.spacing.md },
   tile: {
     width: '48%',
-    backgroundColor: tokens.color.bg2,
-    borderRadius: tokens.radius.sm,
+    backgroundColor: tokens.color.bg0,
+    borderRadius: tokens.radius.md,
     padding: tokens.spacing.md,
     borderWidth: 1,
     borderColor: tokens.color.border,
   },
-  tileAlert: { borderColor: tokens.color.critical, backgroundColor: 'rgba(220,38,38,0.08)' },
-  tileLabel: { ...tokens.typography.caption, color: tokens.color.textSubtle, fontSize: 9 },
-  tileValue: { color: tokens.color.text, fontWeight: '800', marginTop: 6, fontSize: 14 },
+  tileAlert: { borderColor: tokens.color.critical, backgroundColor: tokens.color.criticalSoft },
+  tileLabel: { color: tokens.color.textSubtle, fontSize: 14 },
+  tileValue: { color: tokens.color.text, fontWeight: '700', marginTop: 4, fontSize: 17 },
   tileValueAlert: { color: tokens.color.critical },
-  countdownBox: { alignItems: 'center', gap: tokens.spacing.sm },
-  countdownLabel: { color: tokens.color.critical, fontWeight: '800', fontSize: 11, letterSpacing: 0.8 },
-  countdownValue: { color: tokens.color.text, fontSize: 36, fontWeight: '900' },
+  countdownBox: { alignItems: 'center', gap: tokens.spacing.sm, backgroundColor: tokens.color.criticalSoft, borderRadius: tokens.radius.md, padding: tokens.spacing.md },
+  countdownLabel: { color: tokens.color.critical, fontWeight: '700', fontSize: 16, textAlign: 'center' },
+  countdownValue: { color: tokens.color.critical, fontSize: 32, fontWeight: '800' },
 });

@@ -11,6 +11,7 @@ import { useContactsStore } from '../../store/useContactsStore';
 import { isMockFallbackActive } from '../../services/apiClient';
 import {
   subscribeLocation,
+  subscribeLocationError,
   startLiveTracking,
   getElapsedLabel,
   requestLocationPermissions,
@@ -18,6 +19,16 @@ import {
 } from '../../services/webLocationService';
 import { LoadingState } from '../../components/UiStates';
 import { SOS_STATES } from '../../theme/tokens';
+import { describeLocationError } from '../../services/apiClientPolicy';
+
+const STALE_FIX_MS = 60 * 1000;
+
+function formatFixAge(ms) {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} seconds`;
+  const min = Math.round(s / 60);
+  return min < 60 ? `${min} min` : `${(s / 3600).toFixed(1)} hours`;
+}
 
 function TelemetryRow({ label, value }) {
   return (
@@ -37,12 +48,27 @@ export default function WebLiveSessionScreen() {
   const contacts = useContactsStore((s) => s.contacts);
   const loadContacts = useContactsStore((s) => s.loadContacts);
   const [location, setLocation] = useState(null);
+  const [locationError, setLocationError] = useState(null);
   const [heartbeat, setHeartbeat] = useState(0);
   const [elapsed, setElapsed] = useState('00:00');
   const [loading, setLoading] = useState(true);
+  // navigator.onLine === false is a reliable "offline"; true does not prove the server is reachable.
+  const [offline, setOffline] = useState(typeof navigator !== 'undefined' && navigator.onLine === false);
 
   useEffect(() => {
     loadContacts();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.addEventListener) return undefined;
+    const on = () => setOffline(false);
+    const off = () => setOffline(true);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => {
+      window.removeEventListener('online', on);
+      window.removeEventListener('offline', off);
+    };
   }, []);
 
   useEffect(() => {
@@ -57,30 +83,65 @@ export default function WebLiveSessionScreen() {
 
     const unsub = subscribeLocation((loc) => {
       setLocation(loc);
+      setLocationError(null);
       setHeartbeat((h) => h + 1);
     });
+    const unsubError = subscribeLocationError((code) => setLocationError(code));
 
     const timer = setInterval(() => setElapsed(getElapsedLabel(alertStartedAt)), 1000);
     return () => {
       mounted = false;
       unsub();
+      unsubError();
       clearInterval(timer);
     };
   }, [sessionId, alertStartedAt]);
 
-  if (loading) return <LoadingState message="LOADING TELEMETRY CHANNEL…" />;
+  if (loading) return <LoadingState message="Finding your location…" />;
 
   const isActive = Boolean(sessionId) || sosState === SOS_STATES.ACTIVE_ALERT;
+  const fixAgeMs = location ? Date.now() - location.timestamp : null;
+  const staleFix = fixAgeMs != null && fixAgeMs > STALE_FIX_MS;
 
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.content}>
       <ScreenHeader
-        title="LIVE LOCATION"
-        subtitle={`HEARTBEAT #${heartbeat} · ${isActive ? `ELAPSED ${elapsed}` : 'PREVIEW MODE'}`}
-        status={isActive ? 'TELEMETRY SHARED' : 'GPS ACTIVE'}
+        title="My location"
+        subtitle={
+          isActive
+            ? offline
+              ? 'SOS is active, but live sharing is paused: this device is offline.'
+              : `Sharing live with your contacts for ${elapsed}`
+            : 'Only you can see this until you share it.'
+        }
+        status={isActive ? (offline ? 'Not updating' : 'Sharing live') : 'Location on'}
       />
 
-      <View style={styles.mapWrap}>
+      {isActive && offline ? (
+        <Text style={styles.staleNote} accessibilityRole="alert">
+          No connection. Your contacts' tracking page is not updating; it shows only what was sent before the
+          connection dropped.
+        </Text>
+      ) : null}
+
+      {location && staleFix ? (
+        <Text style={styles.staleNote}>
+          Last GPS fix was {formatFixAge(fixAgeMs)} ago, at {new Date(location.timestamp).toLocaleTimeString()}. It may
+          not show where you are now.
+        </Text>
+      ) : null}
+
+      <View
+        style={styles.mapWrap}
+        role="region"
+        aria-label={
+          location
+            ? location.accuracy != null
+              ? `Map showing your location, accurate to about ${Math.round(location.accuracy)} metres`
+              : 'Map showing your location'
+            : 'Location unavailable'
+        }
+      >
         {location ? (
           <LiveMap
             latitude={location.latitude}
@@ -88,10 +149,24 @@ export default function WebLiveSessionScreen() {
             accuracy={location.accuracy}
             heartbeat={heartbeat}
           />
+        ) : locationError ? (
+          <View style={styles.unavailable} accessibilityRole="alert">
+            <Text style={styles.unavailableTitle}>Location unavailable</Text>
+            <Text style={styles.unavailableText}>
+              We could not get your position because {describeLocationError(locationError)}.
+            </Text>
+          </View>
         ) : (
-          <LoadingState message="ACQUIRING GPS FIX…" />
+          <LoadingState message="Finding your location…" />
         )}
       </View>
+
+      {location && locationError ? (
+        <Text style={styles.staleNote} accessibilityRole="alert">
+          GPS stopped updating ({describeLocationError(locationError)}). The details below are from{' '}
+          {new Date(location.timestamp).toLocaleTimeString()}.
+        </Text>
+      ) : null}
 
       <LiveLocationSharePanel
         location={location}
@@ -102,25 +177,36 @@ export default function WebLiveSessionScreen() {
 
       {isActive ? (
         <View style={styles.broadcastCard}>
-          <Text style={styles.broadcastLabel}>GUARDIAN BROADCAST</Text>
-          <Text style={styles.broadcastValue}>ACTIVE · WHATSAPP DISPATCHED ON SOS</Text>
+          <Text style={styles.broadcastLabel} accessibilityRole="header" aria-level={2}>
+            SOS is active
+          </Text>
+          <Text style={styles.broadcastValue}>
+            Your contacts can follow this link while the SOS is on. See Home for the status of each message.
+          </Text>
           {trackingUrl ? <Text style={styles.trackUrl} numberOfLines={2}>{trackingUrl}</Text> : null}
           {isMockFallbackActive() ? (
-            <Text style={styles.mockNote}>MOCK ADAPTER · LOCAL SESSION SIMULATION</Text>
+            <Text style={styles.mockNote}>Test mode: this alert is simulated.</Text>
           ) : null}
         </View>
       ) : null}
 
       {location ? (
         <View style={styles.telemetry}>
-          <TelemetryRow label="LATITUDE" value={location.latitude.toFixed(6)} />
-          <TelemetryRow label="LONGITUDE" value={location.longitude.toFixed(6)} />
-          <TelemetryRow label="ALTITUDE" value={`${(location.altitude ?? 0).toFixed(1)} m`} />
-          <TelemetryRow label="ACCURACY" value={`±${location.accuracy?.toFixed?.(0) ?? '—'} m`} />
-          <TelemetryRow label="BATTERY" value={location.batteryLevel != null ? `${Math.round(location.batteryLevel * 100)}%` : '—'} />
-          <TelemetryRow label="SIGNAL" value={location.signalQuality || '—'} />
-          <TelemetryRow label="SPEED" value={`${((location.speed ?? 0) * 3.6).toFixed(1)} km/h`} />
-          <TelemetryRow label="LAST FIX" value={new Date(location.timestamp).toLocaleTimeString()} />
+          <Text style={styles.telemetryTitle} accessibilityRole="header" aria-level={2}>
+            Location details
+          </Text>
+          <TelemetryRow label="Latitude" value={location.latitude.toFixed(6)} />
+          <TelemetryRow label="Longitude" value={location.longitude.toFixed(6)} />
+          <TelemetryRow
+            label="Accuracy"
+            value={location.accuracy != null ? `about ${Math.round(location.accuracy)} m` : 'Not reported'}
+          />
+          <TelemetryRow
+            label="Speed"
+            value={location.speed != null ? `${(location.speed * 3.6).toFixed(1)} km/h` : 'Not reported'}
+          />
+          <TelemetryRow label="Battery" value={location.batteryLevel != null ? `${Math.round(location.batteryLevel * 100)}%` : 'Unknown'} />
+          <TelemetryRow label="Last updated" value={new Date(location.timestamp).toLocaleTimeString()} />
         </View>
       ) : null}
 
@@ -131,20 +217,25 @@ export default function WebLiveSessionScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: tokens.color.bg0 },
-  content: { padding: tokens.spacing.lg, paddingBottom: 110 },
+  content: { padding: tokens.spacing.lg, paddingBottom: 40 },
   broadcastCard: {
-    backgroundColor: tokens.color.surface,
+    backgroundColor: tokens.color.successSoft,
     borderRadius: tokens.radius.lg,
     padding: tokens.spacing.lg,
     marginBottom: tokens.spacing.md,
-    borderWidth: 1,
-    borderColor: tokens.color.primary,
+    borderLeftWidth: 4,
+    borderLeftColor: tokens.color.success,
   },
-  broadcastLabel: { ...tokens.typography.caption, color: tokens.color.primaryBright },
-  broadcastValue: { color: tokens.color.text, fontWeight: '800', marginTop: 4, fontSize: 14 },
-  trackUrl: { ...tokens.typography.mono, color: tokens.color.textMuted, marginTop: 6, fontSize: 11 },
-  mockNote: { color: tokens.color.textSubtle, fontSize: 10, marginTop: 6, letterSpacing: 0.5 },
-  mapWrap: { height: 280, borderRadius: tokens.radius.lg, overflow: 'hidden', marginBottom: tokens.spacing.lg },
+  broadcastLabel: { ...tokens.typography.title, color: tokens.color.success },
+  broadcastValue: { color: tokens.color.text, marginTop: 4, fontSize: 16, lineHeight: 22 },
+  trackUrl: { ...tokens.typography.mono, color: tokens.color.textMuted, marginTop: 6 },
+  mockNote: { color: tokens.color.textSubtle, fontSize: 14, marginTop: 6 },
+  unavailable: { flex: 1, justifyContent: 'center', padding: tokens.spacing.lg, backgroundColor: tokens.color.warningSoft, gap: 6 },
+  unavailableTitle: { ...tokens.typography.title, color: tokens.color.warning },
+  unavailableText: { fontSize: 16, lineHeight: 22, color: tokens.color.text },
+  staleNote: { color: tokens.color.warning, fontSize: 15, lineHeight: 22, marginBottom: tokens.spacing.md },
+  mapWrap: { height: 280, borderRadius: tokens.radius.lg, overflow: 'hidden', marginBottom: tokens.spacing.lg, borderWidth: 1, borderColor: tokens.color.border },
+  telemetryTitle: { ...tokens.typography.title, color: tokens.color.text, marginBottom: tokens.spacing.sm },
   telemetry: {
     backgroundColor: tokens.color.surface,
     borderRadius: tokens.radius.lg,
@@ -156,10 +247,10 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 8,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: tokens.color.border,
   },
-  rowLabel: { ...tokens.typography.caption, color: tokens.color.textSubtle, fontSize: 9 },
-  rowValue: { color: tokens.color.text, fontWeight: '700', fontSize: 12, fontFamily: 'monospace' },
+  rowLabel: { color: tokens.color.textMuted, fontSize: 15 },
+  rowValue: { color: tokens.color.text, fontWeight: '700', fontSize: 15 },
 });

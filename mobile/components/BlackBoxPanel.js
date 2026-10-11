@@ -15,13 +15,18 @@ export default function BlackBoxPanel() {
   return (
     <View style={styles.panel}>
       <View style={styles.header}>
-        <Text style={styles.title}>EVIDENCE BLACK BOX</Text>
+        <Text style={styles.title} accessibilityRole="header" aria-level={2}>
+          Audio evidence
+        </Text>
         <View style={[styles.badge, recording ? styles.badgeActive : styles.badgeIdle]}>
-          <Text style={styles.badgeText}>{recording ? 'RECORDING' : 'STANDBY'}</Text>
+          <Text style={[styles.badgeText, recording && styles.badgeTextActive]}>
+            {recording ? 'Recording' : 'Not recording'}
+          </Text>
         </View>
       </View>
+      <Text style={styles.desc}>Sound around you is recorded and secured while SOS is on.</Text>
 
-      <View style={styles.spectrumRow}>
+      <View style={styles.spectrumRow} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" aria-hidden>
         {spectrum.map((level, i) => (
           <View key={i} style={styles.barTrack}>
             <View style={[styles.barFill, { height: `${Math.max(8, level)}%` }]} />
@@ -30,23 +35,25 @@ export default function BlackBoxPanel() {
       </View>
 
       <View style={styles.metrics}>
-        <Metric label="FRAMES" value={String(frameCount)} />
-        <Metric label="BUFFER" value={`${bufferKb} KB`} />
-        <Metric label="MODE" value={silentMode ? 'STEALTH' : 'STANDARD'} />
+        <Metric label="Clips" value={String(frameCount)} />
+        <Metric label="Size" value={`${bufferKb} KB`} />
+        <Metric label="Mode" value={silentMode ? 'Silent' : 'Normal'} />
       </View>
 
-      <Text style={styles.hashLabel}>ENCRYPTED SIGNATURE</Text>
+      <Text style={styles.hashLabel}>Security code</Text>
       <Text style={styles.hash} numberOfLines={1}>
-        {signature || 'AWAITING SESSION ARM'}
+        {signature || 'Starts when SOS begins'}
       </Text>
 
       <View style={styles.toggleRow}>
-        <Text style={styles.toggleLabel}>SILENT AMBIENT MODE</Text>
+        <Text style={styles.toggleLabel}>Silent mode</Text>
         <Switch
           value={silentMode}
           onValueChange={setSilentMode}
-          trackColor={{ false: tokens.color.border, true: tokens.color.primary }}
-          thumbColor={tokens.color.text}
+          accessibilityLabel="Silent mode"
+          trackColor={{ false: tokens.color.borderStrong, true: tokens.color.primary }}
+          thumbColor={tokens.color.onPrimary}
+          activeThumbColor={tokens.color.onPrimary}
         />
       </View>
     </View>
@@ -71,21 +78,23 @@ const styles = StyleSheet.create({
     padding: tokens.spacing.lg,
     marginTop: tokens.spacing.lg,
   },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: tokens.spacing.md },
-  title: { ...tokens.typography.caption, color: tokens.color.primaryBright },
-  badge: { borderRadius: tokens.radius.pill, paddingHorizontal: 10, paddingVertical: 4 },
-  badgeActive: { backgroundColor: 'rgba(220,38,38,0.2)', borderWidth: 1, borderColor: tokens.color.critical },
-  badgeIdle: { backgroundColor: tokens.color.surfaceElevated, borderWidth: 1, borderColor: tokens.color.border },
-  badgeText: { color: tokens.color.text, fontSize: 9, fontWeight: '800', letterSpacing: 0.8 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  title: { ...tokens.typography.title, color: tokens.color.text },
+  desc: { color: tokens.color.textMuted, fontSize: 15, lineHeight: 22, marginBottom: tokens.spacing.md },
+  badge: { borderRadius: tokens.radius.pill, paddingHorizontal: 12, paddingVertical: 4 },
+  badgeActive: { backgroundColor: tokens.color.criticalSoft },
+  badgeIdle: { backgroundColor: tokens.color.surfaceElevated },
+  badgeText: { color: tokens.color.textMuted, fontSize: 14, fontWeight: '700' },
+  badgeTextActive: { color: tokens.color.critical },
   spectrumRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 3, height: 56, marginBottom: tokens.spacing.md },
-  barTrack: { flex: 1, height: '100%', backgroundColor: tokens.color.bg2, borderRadius: 2, justifyContent: 'flex-end', overflow: 'hidden' },
-  barFill: { width: '100%', backgroundColor: tokens.color.primaryBright, borderRadius: 2 },
+  barTrack: { flex: 1, height: '100%', backgroundColor: tokens.color.surfaceElevated, borderRadius: 2, justifyContent: 'flex-end', overflow: 'hidden' },
+  barFill: { width: '100%', backgroundColor: tokens.color.primary, borderRadius: 2 },
   metrics: { flexDirection: 'row', gap: tokens.spacing.sm, marginBottom: tokens.spacing.md },
-  metric: { flex: 1, backgroundColor: tokens.color.bg2, borderRadius: tokens.radius.sm, padding: tokens.spacing.sm },
-  metricLabel: { ...tokens.typography.caption, color: tokens.color.textSubtle, fontSize: 9 },
-  metricValue: { color: tokens.color.text, fontWeight: '800', marginTop: 4, fontSize: 13 },
-  hashLabel: { ...tokens.typography.caption, color: tokens.color.textSubtle, marginBottom: 4 },
-  hash: { ...tokens.typography.mono, color: tokens.color.primaryLight, marginBottom: tokens.spacing.md },
-  toggleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  toggleLabel: { color: tokens.color.textMuted, fontWeight: '700', fontSize: 11, letterSpacing: 0.6 },
+  metric: { flex: 1, backgroundColor: tokens.color.bg0, borderRadius: tokens.radius.md, padding: tokens.spacing.sm },
+  metricLabel: { color: tokens.color.textSubtle, fontSize: 14 },
+  metricValue: { color: tokens.color.text, fontWeight: '700', marginTop: 4, fontSize: 16 },
+  hashLabel: { color: tokens.color.textSubtle, fontSize: 14, marginBottom: 4 },
+  hash: { ...tokens.typography.mono, color: tokens.color.text, marginBottom: tokens.spacing.md },
+  toggleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', minHeight: tokens.minTouch },
+  toggleLabel: { color: tokens.color.text, fontWeight: '700', fontSize: 16 },
 });

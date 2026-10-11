@@ -5,36 +5,35 @@ import { tokens } from '../theme/tokens';
 export default function ScreenHeader({ title, subtitle, status }) {
   return (
     <View style={styles.wrap}>
-      <View style={styles.row}>
-        <Text style={styles.title}>{title}</Text>
-        {status ? (
-          <View style={styles.statusPill}>
-            <View style={styles.statusDot} />
-            <Text style={styles.statusText}>{status}</Text>
-          </View>
-        ) : null}
-      </View>
+      <Text style={styles.title} accessibilityRole="header" aria-level={1}>
+        {title}
+      </Text>
       {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+      {status ? (
+        <View style={styles.statusPill} accessibilityLabel={`Status: ${status}`}>
+          <View style={styles.statusDot} />
+          <Text style={styles.statusText}>{status}</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { marginBottom: tokens.spacing.lg },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  wrap: { marginBottom: tokens.spacing.lg, gap: 6 },
   title: { ...tokens.typography.hero, color: tokens.color.text },
-  subtitle: { ...tokens.typography.subtitle, marginTop: 4, color: tokens.color.textMuted },
+  subtitle: { ...tokens.typography.subtitle, color: tokens.color.textMuted },
   statusPill: {
+    alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: tokens.color.surfaceElevated,
+    gap: 8,
+    backgroundColor: tokens.color.successSoft,
     borderRadius: tokens.radius.pill,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderWidth: 1,
-    borderColor: tokens.color.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginTop: 4,
   },
-  statusDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: tokens.color.primaryBright },
-  statusText: { color: tokens.color.primaryBright, fontSize: 10, fontWeight: '800', letterSpacing: 0.8 },
+  statusDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: tokens.color.success },
+  statusText: { color: tokens.color.success, fontSize: 14, fontWeight: '700' },
 });

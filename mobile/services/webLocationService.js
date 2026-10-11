@@ -1,41 +1,80 @@
 import * as Location from 'expo-location';
 import * as Battery from 'expo-battery';
 import { emitLocationUpdate } from './socketService';
+import { classifyLocationError } from './apiClientPolicy';
 
-let watchId = null;
+const POLL_INTERVAL_MS = 2000;
+
 let intervalId = null;
-let tick = 0;
-let base = { latitude: 28.6139, longitude: 77.209 };
 let listeners = new Set();
+let errorListeners = new Set();
 let streamSessionId = null;
 let lastLocation = null;
+let lastError = null;
 
 function notify(location) {
   lastLocation = location;
+  lastError = null;
   listeners.forEach((cb) => cb(location));
   if (streamSessionId) {
     emitLocationUpdate(streamSessionId, location, 'MONITORING');
   }
 }
 
-function simulateStep() {
-  tick += 1;
-  const t = tick * 0.05;
+function notifyError(code) {
+  lastError = code;
+  errorListeners.forEach((cb) => cb(code));
+}
+
+async function readBatteryLevel() {
+  try {
+    const level = await Battery.getBatteryLevelAsync();
+    return Number.isFinite(level) && level >= 0 ? level : null;
+  } catch {
+    return null;
+  }
+}
+
+function withTimeout(promise, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const err = new Error('Timed out waiting for a GPS fix');
+      err.code = 'TIMEOUT';
+      reject(err);
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+/** Builds a location from a real device fix. Fields the device did not report stay null. */
+function toLocation(pos, batteryLevel) {
   return {
-    latitude: base.latitude + Math.sin(t) * 0.0008,
-    longitude: base.longitude + Math.cos(t) * 0.0008,
-    altitude: 216 + Math.sin(t) * 3,
-    accuracy: 8 + (tick % 5),
-    speed: 1.2 + (tick % 3) * 0.3,
-    heading: (tick * 7) % 360,
-    batteryLevel: 0.72,
-    signalQuality: tick % 4 === 0 ? 'Good' : 'Excellent',
-    timestamp: Date.now(),
+    latitude: pos.coords.latitude,
+    longitude: pos.coords.longitude,
+    altitude: pos.coords.altitude ?? null,
+    accuracy: pos.coords.accuracy ?? null,
+    speed: pos.coords.speed ?? null,
+    heading: pos.coords.heading ?? null,
+    batteryLevel,
+    timestamp: pos.timestamp,
   };
 }
 
 export function getLastKnownLocation() {
   return lastLocation;
+}
+
+export function getLastLocationError() {
+  return lastError;
 }
 
 export function setStreamSessionId(sessionId) {
@@ -47,31 +86,26 @@ export async function requestLocationPermissions() {
   return fg.status === 'granted';
 }
 
-export async function getCurrentPosition() {
-  const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-  base = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-  tick = 0;
-
-  let batteryLevel = 0.78;
+/**
+ * Resolves with a real GPS fix or rejects with an error whose `code` is one of
+ * PERMISSION_DENIED, POSITION_UNAVAILABLE, TIMEOUT or UNSUPPORTED.
+ */
+export async function getCurrentPosition({ timeoutMs = 8000, accuracy = Location.Accuracy.High } = {}) {
   try {
-    batteryLevel = await Battery.getBatteryLevelAsync();
-  } catch {
-    /* noop */
+    const pos = await withTimeout(
+      Location.getCurrentPositionAsync({ accuracy, timeout: timeoutMs }),
+      timeoutMs + 500
+    );
+    const loc = toLocation(pos, await readBatteryLevel());
+    notify(loc);
+    return loc;
+  } catch (err) {
+    const code = classifyLocationError(err);
+    notifyError(code);
+    const wrapped = new Error(err?.message || 'Location unavailable');
+    wrapped.code = code;
+    throw wrapped;
   }
-
-  const loc = {
-    latitude: pos.coords.latitude,
-    longitude: pos.coords.longitude,
-    altitude: pos.coords.altitude ?? 216,
-    accuracy: pos.coords.accuracy ?? 12,
-    speed: pos.coords.speed ?? 0,
-    heading: pos.coords.heading ?? 0,
-    batteryLevel,
-    signalQuality: 'Good',
-    timestamp: pos.timestamp,
-  };
-  notify(loc);
-  return loc;
 }
 
 export function subscribeLocation(callback) {
@@ -80,43 +114,28 @@ export function subscribeLocation(callback) {
   return () => listeners.delete(callback);
 }
 
+export function subscribeLocationError(callback) {
+  errorListeners.add(callback);
+  if (lastError) callback(lastError);
+  return () => errorListeners.delete(callback);
+}
+
 export async function startLiveTracking(sessionId = null) {
   if (sessionId) streamSessionId = sessionId;
   if (intervalId) return;
 
-  try {
-    await getCurrentPosition();
-  } catch {
-    notify(simulateStep());
-  }
+  await getCurrentPosition().catch(() => {});
 
-  intervalId = setInterval(async () => {
-    let loc = simulateStep();
-    try {
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      base = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-      let batteryLevel = 0.78;
-      try {
-        batteryLevel = await Battery.getBatteryLevelAsync();
-      } catch {
-        /* noop */
-      }
-      loc = {
-        latitude: pos.coords.latitude,
-        longitude: pos.coords.longitude,
-        altitude: pos.coords.altitude ?? loc.altitude,
-        accuracy: pos.coords.accuracy ?? loc.accuracy,
-        speed: pos.coords.speed ?? loc.speed,
-        heading: pos.coords.heading ?? loc.heading,
-        batteryLevel,
-        signalQuality: loc.signalQuality,
-        timestamp: Date.now(),
-      };
-    } catch {
-      /* simulated */
-    }
-    notify(loc);
-  }, 2000);
+  let inFlight = false;
+  intervalId = setInterval(() => {
+    if (inFlight) return;
+    inFlight = true;
+    getCurrentPosition({ accuracy: Location.Accuracy.Balanced })
+      .catch(() => {})
+      .finally(() => {
+        inFlight = false;
+      });
+  }, POLL_INTERVAL_MS);
 }
 
 export function stopLiveTracking() {
@@ -124,10 +143,6 @@ export function stopLiveTracking() {
   if (intervalId) {
     clearInterval(intervalId);
     intervalId = null;
-  }
-  if (watchId != null && typeof navigator !== 'undefined' && navigator.geolocation) {
-    navigator.geolocation.clearWatch(watchId);
-    watchId = null;
   }
 }
 

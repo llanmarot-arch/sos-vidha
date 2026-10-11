@@ -9,26 +9,33 @@ export default function AppButton({
   loading = false,
   disabled = false,
   icon = null,
+  accessibilityHint,
+  accessibilityLabel,
 }) {
   const isPrimary = variant === 'primary';
   const isCritical = variant === 'critical';
   const isGhost = variant === 'ghost';
+  const isDisabled = disabled || loading;
 
   return (
     <TouchableOpacity
       activeOpacity={0.7}
       onPress={onPress}
-      disabled={disabled || loading}
+      disabled={isDisabled}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel || label}
+      accessibilityHint={accessibilityHint}
+      accessibilityState={{ disabled: isDisabled, busy: loading }}
       style={[
         styles.base,
         isPrimary && styles.primary,
         isCritical && styles.critical,
         isGhost && styles.ghost,
-        (disabled || loading) && styles.disabled,
+        isDisabled && styles.disabled,
       ]}
     >
       {loading ? (
-        <ActivityIndicator color={isGhost ? tokens.color.primaryBright : tokens.color.text} size="small" />
+        <ActivityIndicator color={isGhost ? styles.labelGhost.color : tokens.color.onPrimary} size="small" />
       ) : (
         <>
           {icon}
@@ -54,20 +61,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
+    minHeight: tokens.minTouch,
     borderRadius: tokens.radius.md,
-    paddingVertical: 13,
-    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
   },
-  primary: { backgroundColor: tokens.color.primary },
-  critical: { backgroundColor: tokens.color.critical },
+  primary: {
+    backgroundColor: tokens.color.primary,
+    borderWidth: tokens.accent === 'white' ? 1.5 : 0,
+    borderColor: tokens.color.borderStrong,
+  },
+  critical: { backgroundColor: tokens.color.criticalFill },
   ghost: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: tokens.color.border,
+    backgroundColor: tokens.color.surface,
+    borderWidth: 1.5,
+    borderColor: tokens.accent === 'white' && tokens.scheme === 'light' ? tokens.color.borderStrong : tokens.color.primary,
   },
-  disabled: { opacity: 0.5 },
-  label: { fontWeight: '700', fontSize: 13, letterSpacing: 0.4 },
-  labelPrimary: { color: tokens.color.text },
-  labelCritical: { color: tokens.color.text },
-  labelGhost: { color: tokens.color.textMuted },
+  disabled: { opacity: 0.45 },
+  label: { fontWeight: '700', fontSize: 16, textAlign: 'center' },
+  labelPrimary: { color: tokens.color.onPrimary },
+  labelCritical: { color: tokens.color.onCritical },
+  labelGhost: {
+    color: tokens.accent === 'white' && tokens.scheme === 'light' ? tokens.color.text : tokens.color.primary,
+  },
 });

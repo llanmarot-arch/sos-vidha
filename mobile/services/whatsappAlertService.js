@@ -12,8 +12,8 @@ export function buildWhatsAppUrl(phone, message) {
 }
 
 /**
- * Opens WhatsApp chat for each contact with pre-filled SOS + live tracking message.
- * Also attempts server-side Twilio WhatsApp dispatch when backend is online.
+ * Opens a WhatsApp chat for each contact with a pre-filled message the user sends themselves,
+ * and asks the server to send its own WhatsApp alert for the session.
  */
 export async function dispatchWhatsAppAlerts(contacts, payload) {
   const message = buildShareMessage(payload);
@@ -35,18 +35,13 @@ export async function dispatchWhatsAppAlerts(contacts, payload) {
   }
 
   try {
-    const serverResult = await apiClient.sendWhatsAppAlerts({
-      contacts: contacts.map((c) => c.phone),
-      message,
-      sessionId: payload.sessionId,
-      trackingUrl: payload.trackingUrl,
-    });
-    results.push({ method: 'server', status: 'dispatched', serverResult });
+    // The server picks recipients and builds the message from its own records.
+    const serverResult = await apiClient.sendWhatsAppAlerts({ sessionId: payload.sessionId });
+    results.push({ method: 'server', status: 'requested', serverResult });
   } catch {
-    console.info('[WhatsApp] Server dispatch skipped — client wa.me links opened');
+    console.info('[WhatsApp] Server dispatch unavailable; only wa.me links were opened');
   }
 
-  console.info(`[WhatsApp] Live location shared to ${contacts.length} contact(s)`);
   return results;
 }
 

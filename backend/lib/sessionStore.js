@@ -1,24 +1,21 @@
-const { v4: uuidv4 } = require('uuid');
-
 /**
- * In-memory active session tracker with heartbeat health checks.
- * Structured for future Redis adapter migration.
+ * In-memory live state for active SOS sessions (sockets, latest location, secrets).
+ * The durable incident record lives in the incident repository; session ID == incident ID.
+ * Structured for a future Redis adapter migration.
  */
 class SessionStore {
-  constructor() {
+  constructor({ now = Date.now } = {}) {
     /** @type {Map<string, object>} */
     this.sessions = new Map();
+    this.now = now;
   }
 
   create(payload) {
-    const sessionId = uuidv4();
-    const now = Date.now();
+    const now = this.now();
 
     const record = {
-      sessionId,
-      userPhone: payload.userPhone,
-      contact1: payload.contact1,
-      contact2: payload.contact2,
+      sessionId: payload.sessionId,
+      userId: payload.userId || null,
       mode: payload.mode,
       status: 'MONITORING',
       geofence: payload.geofence || null,
@@ -28,17 +25,25 @@ class SessionStore {
       standardPinHash: payload.standardPinHash || null,
       duressPinHash: payload.duressPinHash || null,
       disarmToken: payload.disarmToken || null,
+      trackerToken: payload.trackerToken || null,
+      trackerExpiresAt: payload.trackerExpiresAt ?? null,
+      trackerRevoked: false,
+      profileName: payload.profileName || null,
+      safeZone: payload.safeZone || null,
+      recipients: payload.recipients || [],
       location: payload.initialLocation || null,
+      locationUnavailableReason: payload.locationUnavailableReason || null,
       lastHeartbeat: now,
-      lastLocationUpdate: now,
+      lastLocationUpdate: payload.initialLocation ? now : null,
       createdAt: now,
       emergencyTriggeredAt: null,
+      emergencyReason: null,
       duressActive: false,
       socketIds: new Set(),
       trackerSocketIds: new Set(),
     };
 
-    this.sessions.set(sessionId, record);
+    this.sessions.set(record.sessionId, record);
     return record;
   }
 
@@ -46,28 +51,23 @@ class SessionStore {
     return this.sessions.get(sessionId) || null;
   }
 
+  /** Expects a location already checked by validateLocationInput. */
   updateLocation(sessionId, location) {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
-
-    session.location = {
-      latitude: location.latitude,
-      longitude: location.longitude,
-      speed: location.speed ?? null,
-      heading: location.heading ?? null,
-      accuracy: location.accuracy ?? null,
-      batteryLevel: location.batteryLevel ?? null,
-      timestamp: location.timestamp || Date.now(),
-    };
-    session.lastLocationUpdate = Date.now();
-    session.lastHeartbeat = Date.now();
+    session.location = { ...location };
+    session.locationUnavailableReason = null;
+    session.lastLocationUpdate = this.now();
+    session.lastHeartbeat = this.now();
     return session;
   }
 
+  /** Clients may only report monitoring states; emergencies go through triggerEmergency. */
   updateClientStatus(sessionId, status) {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
-    if (['MONITORING', 'WARNING', 'EMERGENCY', 'DURESS_ACTIVE'].includes(status)) {
+    if (session.status === 'DISARMED' || session.emergencyTriggeredAt) return session;
+    if (['MONITORING', 'WARNING'].includes(status)) {
       session.status = status;
     }
     return session;
@@ -76,22 +76,24 @@ class SessionStore {
   touchHeartbeat(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
-    session.lastHeartbeat = Date.now();
+    session.lastHeartbeat = this.now();
     return session;
   }
 
-  triggerEmergency(sessionId, { reason, duress = false } = {}) {
+  triggerEmergency(sessionId, { reason, duress = false, at = null } = {}) {
     const session = this.sessions.get(sessionId);
-    if (!session) return null;
+    if (!session || session.status === 'DISARMED') return null;
 
-    if ((session.status === 'EMERGENCY' || session.status === 'DURESS_ACTIVE') && !duress) {
+    if (session.emergencyTriggeredAt && !duress) {
       return session;
     }
 
     session.status = duress ? 'DURESS_ACTIVE' : 'EMERGENCY';
     session.duressActive = duress;
     session.emergencyReason = reason || 'UNKNOWN';
-    session.emergencyTriggeredAt = Date.now();
+    if (!session.emergencyTriggeredAt) {
+      session.emergencyTriggeredAt = at ?? this.now();
+    }
     return session;
   }
 
@@ -100,8 +102,31 @@ class SessionStore {
     if (!session) return null;
     session.status = 'DISARMED';
     session.duressActive = false;
-    session.disarmedAt = Date.now();
+    session.disarmedAt = this.now();
+    session.trackerRevoked = true;
+    session.trackerToken = null;
     return session;
+  }
+
+  revokeTrackerAccess(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    session.trackerRevoked = true;
+    session.trackerToken = null;
+    return session;
+  }
+
+  /** Revokes tracker capabilities past their expiry; returns the affected session IDs. */
+  expireTrackerCapabilities() {
+    const now = this.now();
+    const expired = [];
+    for (const session of this.sessions.values()) {
+      if (!session.trackerRevoked && session.trackerExpiresAt != null && now >= session.trackerExpiresAt) {
+        this.revokeTrackerAccess(session.sessionId);
+        expired.push(session.sessionId);
+      }
+    }
+    return expired;
   }
 
   activateDuress(sessionId) {
@@ -109,7 +134,7 @@ class SessionStore {
     if (!session) return null;
     session.duressActive = true;
     session.status = 'DURESS_ACTIVE';
-    session.duressActivatedAt = Date.now();
+    session.duressActivatedAt = this.now();
     return session;
   }
 
@@ -142,7 +167,7 @@ class SessionStore {
   }
 
   getStaleSessions(thresholdMs) {
-    const now = Date.now();
+    const now = this.now();
     const stale = [];
 
     for (const session of this.sessions.values()) {
@@ -159,7 +184,7 @@ class SessionStore {
   }
 
   cleanup(maxAgeMs = 24 * 60 * 60 * 1000) {
-    const now = Date.now();
+    const now = this.now();
     for (const [id, session] of this.sessions.entries()) {
       const terminal =
         session.status === 'DISARMED' ||

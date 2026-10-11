@@ -11,7 +11,9 @@ import {
   Animated,
   Dimensions,
   Pressable,
+  AppState,
 } from 'react-native';
+import { apiClient } from '../services/apiClient';
 import MapView, { Circle, Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
 import Slider from '@react-native-community/slider';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -35,6 +37,13 @@ import { connectSocket, disconnectSocket, emitTriggerEmergency } from '../servic
 import { fetchTransitRoutes, geocodeDestination } from '../services/routeService';
 import { buildSessionPinPayload } from '../utils/pinCrypto';
 import { SYSTEM_STATES, useSafetyStore } from '../store/useSafetyStore';
+import { useSOSDispatch } from '../hooks/useSOSDispatch';
+import { useSOSFlowStore } from '../store/useSOSFlowStore';
+import { useContactsStore } from '../store/useContactsStore';
+import { useAuthStore } from '../store/useAuthStore';
+import { SOS_STATES } from '../theme/tokens';
+import AlertStatusPanel from '../components/AlertStatusPanel';
+import IncidentStatusPanel from '../components/IncidentStatusPanel';
 
 const { height: SCREEN_H } = Dimensions.get('window');
 
@@ -142,6 +151,27 @@ export default function HomeScreen() {
   const [duressPinInput, setDuressPinInput] = useState('');
   const [drawerExpanded, setDrawerExpanded] = useState(true);
   const drawerHeight = useRef(new Animated.Value(SCREEN_H * 0.46)).current;
+  const { dispatchSOS, cancelAlert } = useSOSDispatch();
+  const sosState = useSOSFlowStore((s) => s.sosState);
+  const flow = useSOSFlowStore();
+  const userId = useAuthStore((s) => s.user?.id ?? null);
+
+  const [serverReachable, setServerReachable] = useState(null);
+
+  useEffect(() => {
+    useContactsStore.getState().loadContacts(userId);
+  }, [userId]);
+
+  useEffect(() => {
+    const check = () =>
+      apiClient
+        .probeBackend()
+        .then(() => setServerReachable(true))
+        .catch(() => setServerReachable(false));
+    check();
+    const sub = AppState.addEventListener('change', (s) => s === 'active' && check());
+    return () => sub.remove();
+  }, []);
 
   useEffect(() => {
     registerLocationStoreAccessor(() => useSafetyStore.getState);
@@ -354,9 +384,12 @@ export default function HomeScreen() {
   const handleManualSOS = () => {
     if (store.sessionId) {
       emitTriggerEmergency(store.sessionId, 'MANUAL_SOS');
+      store.triggerEmergency();
+      setShowDisarmModal(true);
+      return;
     }
-    store.triggerEmergency();
-    setShowDisarmModal(true);
+    // No monitoring session: save the SOS on the phone first, then send it (or queue it) via the account API.
+    if (sosState === SOS_STATES.IDLE) dispatchSOS();
   };
 
   const handleDisarmSuccess = useCallback(async () => {
@@ -427,6 +460,21 @@ export default function HomeScreen() {
         {store.warningMessage ? (
           <View style={styles.warningChip}>
             <Text style={styles.warningText}>{store.warningMessage}</Text>
+          </View>
+        ) : null}
+
+        {serverReachable === false ? (
+          <View style={styles.warningChip}>
+            <Text style={styles.warningText}>
+              OFFLINE MAP UNAVAILABLE · No connection. SOS-Vidha has no offline map; any map shown is your phone's own
+              cache and may be incomplete. Live tracking is not updating.
+            </Text>
+          </View>
+        ) : null}
+
+        {!store.currentLocation ? (
+          <View style={styles.infoChip}>
+            <Text style={styles.infoChipText}>No GPS fix yet. The map is not centred on your position.</Text>
           </View>
         ) : null}
       </SafeAreaView>
@@ -571,7 +619,34 @@ export default function HomeScreen() {
             </TouchableOpacity>
           ) : null}
 
-          <HoldSOSButton onActivate={handleManualSOS} disabled={!store.sessionId && !store.userPhone} />
+          <HoldSOSButton
+            onActivate={handleManualSOS}
+            disabled={!store.sessionId && sosState !== SOS_STATES.IDLE}
+          />
+          {sosState === SOS_STATES.DISPATCHING ? (
+            <Text style={styles.dispatchingText}>Saving SOS on this phone and sending…</Text>
+          ) : null}
+
+          {sosState === SOS_STATES.ACTIVE_ALERT ? (
+            <View style={styles.alertBlock}>
+              <AlertStatusPanel
+                deliveries={flow.deliveries}
+                alertsMode={flow.alertsMode}
+                alertLocation={flow.alertLocation}
+                followUpError={flow.followUpError}
+                alertStatusError={flow.alertStatusError}
+              />
+              <TouchableOpacity style={styles.secondaryBtn} onPress={cancelAlert}>
+                <Text style={styles.secondaryBtnText}>Stop SOS alert</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+          {flow.dispatchError ? <Text style={styles.dispatchError}>{flow.dispatchError}</Text> : null}
+
+          <IncidentStatusPanel
+            dark
+            hideIncidentId={sosState === SOS_STATES.ACTIVE_ALERT ? flow.localIncidentId : null}
+          />
         </ScrollView>
       </Animated.View>
 
@@ -634,6 +709,14 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   warningText: { color: '#0F172A', fontWeight: '700' },
+  infoChip: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  infoChipText: { color: COLORS.muted, fontWeight: '600', fontSize: 12 },
   drawer: {
     position: 'absolute',
     left: 0,
@@ -716,4 +799,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   secondaryBtnText: { color: COLORS.muted, fontWeight: '700' },
+  dispatchingText: { color: COLORS.amber, fontWeight: '700', marginTop: 8, textAlign: 'center' },
+  dispatchError: { color: COLORS.crimson, fontWeight: '700', marginTop: 8 },
+  alertBlock: { marginTop: 12 },
 });

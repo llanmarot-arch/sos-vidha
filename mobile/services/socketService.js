@@ -1,5 +1,6 @@
 import { io } from 'socket.io-client';
 import { SOCKET_URL, HEARTBEAT_INTERVAL_MS } from '../constants/config';
+import { getSupabase, isSupabaseConfigured } from '../lib/supabaseClient';
 
 let socket = null;
 let heartbeatTimer = null;
@@ -8,10 +9,25 @@ export function getSocket() {
   return socket;
 }
 
-export function connectSocket(sessionId, handlers = {}) {
+async function resolveOwnerAuthToken() {
+  if (!isSupabaseConfigured()) {
+    return null;
+  }
+  const supabase = getSupabase();
+  if (!supabase) {
+    return null;
+  }
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token || null;
+}
+
+export async function connectSocket(sessionId, handlers = {}) {
   if (socket?.connected) {
     socket.disconnect();
   }
+
+  const token = await resolveOwnerAuthToken();
+  const auth = token ? { token } : {};
 
   socket = io(SOCKET_URL, {
     transports: ['websocket'],
@@ -19,6 +35,7 @@ export function connectSocket(sessionId, handlers = {}) {
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
     timeout: 10000,
+    auth,
   });
 
   socket.on('connect', () => {
@@ -30,6 +47,7 @@ export function connectSocket(sessionId, handlers = {}) {
   socket.on('ROOM_JOINED', (data) => handlers.onRoomJoined?.(data));
   socket.on('LOCATION_UPDATE', (data) => handlers.onLocationUpdate?.(data));
   socket.on('EMERGENCY_ACK', (data) => handlers.onEmergencyAck?.(data));
+  socket.on('ALERT_STATUS', (data) => handlers.onAlertStatus?.(data));
   socket.on('ERROR', (data) => handlers.onError?.(data));
 
   socket.on('disconnect', (reason) => {
@@ -59,7 +77,7 @@ function stopHeartbeat() {
 }
 
 export function emitLocationUpdate(sessionId, location, clientStatus = 'MONITORING') {
-  if (!socket?.connected) return;
+  if (!socket?.connected || location?.timestamp == null) return;
   socket.emit('location-stream', {
     sessionId,
     latitude: location.latitude,
@@ -68,7 +86,7 @@ export function emitLocationUpdate(sessionId, location, clientStatus = 'MONITORI
     heading: location.heading ?? null,
     accuracy: location.accuracy ?? null,
     batteryLevel: location.batteryLevel ?? null,
-    timestamp: location.timestamp || Date.now(),
+    timestamp: location.timestamp,
     clientStatus,
   });
 }

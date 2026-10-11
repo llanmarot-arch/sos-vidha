@@ -23,14 +23,14 @@ export default function WebSentinelScreen() {
     })();
   }, []);
 
-  if (loading) return <LoadingState message="INITIALIZING SENTINEL MESH…" />;
+  if (loading) return <LoadingState message="Looking for people nearby…" />;
 
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.content}>
       <ScreenHeader
-        title="SENTINEL NETWORK"
-        subtitle="Localized peer safety mesh · privacy-preserving distress relay"
-        status="MESH ONLINE"
+        title="Nearby help"
+        subtitle="Let SOS-Vidha users close to you know you need help. Your exact location stays hidden."
+        status="Connected"
       />
       <SentinelRadar latitude={coords.latitude} longitude={coords.longitude} />
     </ScrollView>
@@ -39,5 +39,5 @@ export default function WebSentinelScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: tokens.color.bg0 },
-  content: { padding: tokens.spacing.lg, paddingBottom: 110 },
+  content: { padding: tokens.spacing.lg, paddingBottom: 40 },
 });
