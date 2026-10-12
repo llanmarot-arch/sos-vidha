@@ -1,6 +1,6 @@
 # SOS-Vidha
 
-Production-ready personal safety application with React Native (Expo) mobile client and Node.js backend.
+Production personal-safety application in active development. React Native (Expo) client and Node.js backend. Do not treat untested device, carrier, or live-provider behavior as verified.
 
 ## Architecture
 

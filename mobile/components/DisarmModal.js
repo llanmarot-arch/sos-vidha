@@ -12,8 +12,8 @@ import {
 } from 'react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as Haptics from 'expo-haptics';
-import { API_BASE_URL } from '../constants/config';
-import { hashPinForDisarm } from '../utils/pinCrypto';
+import { apiClient } from '../services/apiClient';
+import { useThemedStyles } from '../theme/useTheme';
 
 const PIN_LENGTH = 4;
 const SHEET_HEIGHT = Dimensions.get('window').height * 0.72;
@@ -26,6 +26,7 @@ export default function DisarmModal({
   onDisarmSuccess,
   onClose,
 }) {
+  const { theme, styles } = useThemedStyles(createDisarmStyles);
   const [pin, setPin] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -56,23 +57,17 @@ export default function DisarmModal({
     ]).start(() => onClose?.());
   }, [onClose, slideAnim, backdropAnim]);
 
-  const submitDisarm = async ({ pinHash, method, token } = {}) => {
+  const submitDisarm = async ({ pin, method, token } = {}) => {
     if (!sessionId) return;
 
     setSubmitting(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/session/disarm`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          pinHash,
-          disarmToken: token,
-          method,
-        }),
+      const data = await apiClient.disarmSession({
+        sessionId,
+        pin,
+        disarmToken: token,
+        method,
       });
-
-      const data = await response.json();
 
       if (data.success) {
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -128,8 +123,7 @@ export default function DisarmModal({
     setPin(next);
 
     if (next.length === PIN_LENGTH) {
-      const pinHash = await hashPinForDisarm(next, pinSalt);
-      await submitDisarm({ pinHash, method: 'PIN' });
+      await submitDisarm({ pin: next, method: 'PIN' });
     }
   };
 
@@ -170,7 +164,7 @@ export default function DisarmModal({
           </Text>
 
           {submitting ? (
-            <ActivityIndicator size="large" color="#10B981" style={styles.loader} />
+            <ActivityIndicator size="large" color={theme.color.success} style={styles.loader} />
           ) : null}
 
           {statusMessage ? (
@@ -212,21 +206,22 @@ export default function DisarmModal({
   );
 }
 
-const styles = StyleSheet.create({
+function createDisarmStyles(theme) {
+  return {
   root: { flex: 1, justifyContent: 'flex-end' },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(15, 23, 42, 0.88)',
+    backgroundColor: theme.color.overlay,
   },
   sheet: {
-    backgroundColor: '#1E293B',
+    backgroundColor: theme.color.surface,
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     paddingHorizontal: 24,
     paddingBottom: 36,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderColor: '#334155',
+    borderColor: theme.color.border,
     minHeight: SHEET_HEIGHT,
   },
   handle: {
@@ -234,38 +229,38 @@ const styles = StyleSheet.create({
     width: 44,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#475569',
+    backgroundColor: theme.color.borderStrong,
     marginBottom: 20,
   },
   title: {
-    color: '#F8FAFC',
+    color: theme.color.text,
     fontSize: 24,
     fontWeight: '800',
     textAlign: 'center',
     marginBottom: 8,
   },
   subtitle: {
-    color: '#94A3B8',
+    color: theme.color.textMuted,
     textAlign: 'center',
     marginBottom: 24,
     lineHeight: 20,
   },
   loader: { marginVertical: 20 },
   status: {
-    color: '#EF4444',
+    color: theme.color.critical,
     textAlign: 'center',
     fontWeight: '600',
     marginBottom: 16,
   },
-  statusOk: { color: '#10B981' },
+  statusOk: { color: theme.color.success },
   biometricBtn: {
-    backgroundColor: '#10B981',
+    backgroundColor: theme.color.success,
     paddingVertical: 16,
     borderRadius: 16,
     marginBottom: 16,
   },
   biometricText: {
-    color: '#0F172A',
+    color: theme.color.onSuccess,
     textAlign: 'center',
     fontWeight: '800',
     fontSize: 16,
@@ -281,11 +276,11 @@ const styles = StyleSheet.create({
     height: 18,
     borderRadius: 9,
     borderWidth: 2,
-    borderColor: '#64748B',
+    borderColor: theme.color.borderStrong,
   },
   pinDotFilled: {
-    backgroundColor: '#10B981',
-    borderColor: '#10B981',
+    backgroundColor: theme.color.success,
+    borderColor: theme.color.success,
   },
   keypad: {
     flexDirection: 'row',
@@ -297,14 +292,17 @@ const styles = StyleSheet.create({
     width: 76,
     height: 76,
     borderRadius: 38,
-    backgroundColor: '#334155',
+    backgroundColor: theme.color.surfaceElevated,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: theme.color.border,
   },
   keyWide: { width: 160 },
-  keyPressed: { backgroundColor: '#475569', transform: [{ scale: 0.96 }] },
+  keyPressed: { backgroundColor: theme.color.border, transform: [{ scale: 0.96 }] },
   keySpacer: { width: 76, height: 76 },
-  keyText: { color: '#F8FAFC', fontSize: 26, fontWeight: '600' },
-  cancelLink: { marginTop: 24, alignItems: 'center' },
-  cancelText: { color: '#64748B', fontWeight: '600' },
-});
+  keyText: { color: theme.color.text, fontSize: 26, fontWeight: '600' },
+  cancelLink: { marginTop: 24, alignItems: 'center', minHeight: 48, justifyContent: 'center' },
+  cancelText: { color: theme.color.accentOnSurface, fontWeight: '700', fontSize: 16 },
+  };
+}

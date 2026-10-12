@@ -8,6 +8,7 @@ import { useContactsStore } from '../store/useContactsStore';
 import { useBlackBoxStore } from '../store/useBlackBoxStore';
 import { SOS_STATES } from '../theme/tokens';
 import { connectSocket, disconnectSocket } from '../services/socketService';
+import * as LocalAuthentication from 'expo-local-authentication';
 import {
   startLiveTracking,
   stopLiveTracking,
@@ -22,6 +23,28 @@ const ABORT_SECONDS = 3;
 const GPS_TIMEOUT_MS = 6000;
 const ALERT_POLL_INTERVAL_MS = 5000;
 const ALERT_POLL_MAX_MS = 3 * 60 * 1000;
+
+async function confirmStopWithBiometric() {
+  let hasHardware = false;
+  let enrolled = false;
+  try {
+    hasHardware = await LocalAuthentication.hasHardwareAsync();
+    enrolled = hasHardware && (await LocalAuthentication.isEnrolledAsync());
+  } catch {
+    return true;
+  }
+  if (!hasHardware || !enrolled) return true;
+  try {
+    const result = await LocalAuthentication.authenticateAsync({
+      promptMessage: 'Confirm it is you before stopping this SOS',
+      cancelLabel: 'Keep SOS active',
+      disableDeviceFallback: false,
+    });
+    return Boolean(result?.success);
+  } catch {
+    return false;
+  }
+}
 
 async function captureLocation() {
   try {
@@ -124,11 +147,6 @@ export function useSOSDispatch() {
       } catch {
         failed.push('live location updates');
       }
-      try {
-        await useBlackBoxStore.getState().startRecording();
-      } catch {
-        failed.push('audio recording');
-      }
       if (failed.length) {
         useSOSFlowStore
           .getState()
@@ -225,6 +243,11 @@ export function useSOSDispatch() {
   }, [clearCountdownTimer]);
 
   const cancelAlert = useCallback(async () => {
+    const allowed = await confirmStopWithBiometric();
+    if (!allowed) {
+      useSOSFlowStore.getState().setFollowUpError('SOS is still active. It was not stopped.');
+      return;
+    }
     const { sessionId, disarmToken, localIncidentId } = useSOSFlowStore.getState();
     if (sessionId && disarmToken) {
       try {

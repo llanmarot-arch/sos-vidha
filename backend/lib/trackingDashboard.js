@@ -1,5 +1,14 @@
 const { resolvePublicServerUrl } = require('./serverUrl');
 
+function embedJson(value) {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
 function mapDisplayStatus(status) {
   switch (status) {
     case 'MONITORING':
@@ -21,6 +30,7 @@ function renderTrackingDashboard(sessionId, session, options = {}) {
   const publicUrl = options.publicUrl || resolvePublicServerUrl(options.port);
   const staleAfterMs = options.staleAfterMs || 120000;
   const mapboxToken = process.env.MAPBOX_ACCESS_TOKEN || '';
+  const shortId = /^[0-9a-f]{8}-/i.test(String(sessionId)) ? String(sessionId).slice(0, 8) : 'unknown';
   const loc = session.location;
   const displayStatus = mapDisplayStatus(session.status);
   const speedKmh = loc?.speed != null ? (loc.speed * 3.6).toFixed(1) : '—';
@@ -99,7 +109,7 @@ function renderTrackingDashboard(sessionId, session, options = {}) {
 <body>
   <header>
     <h1>SOS-Vidha Live Guardian</h1>
-    <p>Session ${sessionId.slice(0, 8)}… · Real-time safety telemetry</p>
+    <p>Session ${shortId}… · Real-time safety telemetry</p>
   </header>
   <div id="map"></div>
   <div class="hud">
@@ -134,10 +144,10 @@ function renderTrackingDashboard(sessionId, session, options = {}) {
   </div>
   <div class="footer">Connected to ${publicUrl}</div>
   <script>
-    const sessionId = ${JSON.stringify(sessionId)};
-    const mapboxToken = ${JSON.stringify(mapboxToken)};
+    const sessionId = ${embedJson(sessionId)};
+    const mapboxToken = ${embedJson(mapboxToken)};
     const staleAfterMs = ${Number(staleAfterMs)};
-    const initialLocation = ${JSON.stringify(
+    const initialLocation = ${embedJson(
       loc ? { latitude: loc.latitude, longitude: loc.longitude, timestamp: loc.timestamp } : null
     )};
 
@@ -233,7 +243,7 @@ function renderTrackingDashboard(sessionId, session, options = {}) {
       document.getElementById('lastFixValue').textContent = new Date(loc.timestamp).toLocaleString();
     }
 
-    const socketAuth = ${JSON.stringify(
+    const socketAuth = ${embedJson(
       useSecureSocket
         ? { trackerToken: trackerTokenForSocket, sessionId }
         : { sessionId }
@@ -242,7 +252,7 @@ function renderTrackingDashboard(sessionId, session, options = {}) {
     socket.on('connect', () => {
       socket.emit('join-tracker', {
         sessionId,
-        trackerToken: ${JSON.stringify(trackerTokenForSocket || null)},
+        trackerToken: ${embedJson(trackerTokenForSocket || null)},
       });
     });
     socket.on('TRACKER_SNAPSHOT', (data) => updateHud(data));

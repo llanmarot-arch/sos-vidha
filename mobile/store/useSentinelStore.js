@@ -4,11 +4,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const STORAGE_KEY = '@sosvidha/sentinel_settings';
 
 export const useSentinelStore = create((set, get) => ({
-  activeSentinels: 7,
+  activeSentinels: null,
   privacyRadiusM: 150,
-  broadcastEnabled: true,
+  broadcastEnabled: false,
   lastPingAt: null,
   nearbyPings: [],
+  unavailableNote: null,
   loading: false,
 
   loadSettings: async () => {
@@ -33,20 +34,14 @@ export const useSentinelStore = create((set, get) => ({
   setBroadcastEnabled: (broadcastEnabled) => get().persist({ broadcastEnabled }),
 
   sendPing: () => {
-    const ping = {
-      id: `ping-${Date.now()}`,
-      distanceM: Math.round(80 + Math.random() * 400),
-      masked: true,
-      timestamp: Date.now(),
-    };
-    set((state) => ({
-      lastPingAt: Date.now(),
-      activeSentinels: Math.max(3, state.activeSentinels + (Math.random() > 0.7 ? 1 : 0)),
-      nearbyPings: [ping, ...state.nearbyPings].slice(0, 8),
-    }));
+    set({
+      unavailableNote: 'Nearby alerts are not connected. This did not contact anyone.',
+    });
   },
 
   checkIn: () => {
-    set({ lastPingAt: Date.now(), activeSentinels: get().activeSentinels + 1 });
+    set({
+      unavailableNote: 'A safety check-in to people nearby is not available.',
+    });
   },
 }));

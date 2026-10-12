@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Linking } from 'react-native';
+import { View, Text, Linking } from 'react-native';
 import AppButton from './AppButton';
 import ConfirmDialog from './ConfirmDialog';
-import { tokens } from '../theme/tokens';
+import { useThemedStyles } from '../theme/useTheme';
 import { useIncidentStore, selectFeaturedIncident } from '../store/useIncidentStore';
 import { useContactsStore } from '../store/useContactsStore';
 import { useProfileStore } from '../store/useProfileStore';
@@ -21,12 +21,12 @@ import {
 import { isDeviceSmsAvailable, composeDeviceSms } from '../services/incidents/deviceSms';
 import { useSOSFlowStore } from '../store/useSOSFlowStore';
 
-const TONE_COLOR = {
-  success: tokens.color.success,
-  warning: tokens.color.warning,
-  critical: tokens.color.critical,
-  neutral: tokens.color.textMuted,
-};
+function toneColor(theme, tone) {
+  if (tone === 'success') return theme.color.success;
+  if (tone === 'warning') return theme.color.warning;
+  if (tone === 'critical') return theme.color.critical;
+  return theme.color.textMuted;
+}
 
 const RECIPIENT_LABEL = {
   [RECIPIENT_STATUS.NOT_ATTEMPTED]: ['Not sent', 'warning'],
@@ -37,18 +37,19 @@ const RECIPIENT_LABEL = {
   [RECIPIENT_STATUS.UNKNOWN]: ['Unknown', 'warning'],
 };
 
-function LedgerRow({ entry, dark }) {
+function LedgerRow({ entry }) {
+  const { theme, styles } = useThemedStyles(createStyles);
   const [label, tone] = RECIPIENT_LABEL[entry.status] || RECIPIENT_LABEL[RECIPIENT_STATUS.UNKNOWN];
   const route = entry.route === ROUTE.DEVICE_SMS ? 'Text from your phone' : 'SMS from SOS-Vidha server';
   return (
-    <View style={[styles.row, dark && styles.rowDark]} role="listitem">
-      <Text style={[styles.rowName, dark && styles.textDark]}>
+    <View style={styles.row} role="listitem">
+      <Text style={styles.rowName}>
         {route} to {entry.recipientName || entry.to || 'contact'}
       </Text>
-      <Text style={[styles.rowStatus, { color: TONE_COLOR[tone] }]}>{label}</Text>
-      {entry.detail ? <Text style={[styles.subtle, dark && styles.subtleDark]}>{entry.detail}</Text> : null}
+      <Text style={[styles.rowStatus, { color: toneColor(theme, tone) }]}>{label}</Text>
+      {entry.detail ? <Text style={styles.subtle}>{entry.detail}</Text> : null}
       {entry.providerMessageId ? (
-        <Text style={[styles.subtle, dark && styles.subtleDark]}>Provider ref …{entry.providerMessageId.slice(-6)}</Text>
+        <Text style={styles.subtle}>Provider ref …{entry.providerMessageId.slice(-6)}</Text>
       ) : null}
     </View>
   );
@@ -58,7 +59,8 @@ function LedgerRow({ entry, dark }) {
  * Honest status for an SOS saved on this phone. Hidden while the live alert panel already shows the same incident.
  * `hideIncidentId` lets the caller suppress the incident that is currently live.
  */
-export default function IncidentStatusPanel({ hideIncidentId = null, dark = false }) {
+export default function IncidentStatusPanel({ hideIncidentId = null }) {
+  const { theme, styles } = useThemedStyles(createStyles);
   const incidents = useIncidentStore((s) => s.incidents);
   const contacts = useContactsStore((s) => s.contacts);
   const profileName = useProfileStore((s) => s.profile?.full_name || null);
@@ -120,39 +122,39 @@ export default function IncidentStatusPanel({ hideIncidentId = null, dark = fals
 
   return (
     <View
-      style={[styles.card, dark && styles.cardDark, { borderLeftColor: TONE_COLOR[summary.tone] }]}
+      style={[styles.card, { borderLeftColor: toneColor(theme, summary.tone) }]}
       accessibilityRole="alert"
       accessibilityLiveRegion="polite"
     >
       {suppressed ? (
         <>
-          <Text style={[styles.title, { color: TONE_COLOR.warning }]} accessibilityRole="header" aria-level={2}>
+          <Text style={[styles.title, { color: toneColor(theme, 'warning') }]} accessibilityRole="header" aria-level={2}>
             Text from this phone
           </Text>
-          <Text style={[styles.text, dark && styles.textDark]}>
+          <Text style={styles.text}>
             The server has not confirmed that a text was sent. You can send one yourself. You must press send.
           </Text>
         </>
       ) : (
         <>
-          <Text style={[styles.title, { color: TONE_COLOR[summary.tone] }]} accessibilityRole="header" aria-level={2}>
+          <Text style={[styles.title, { color: toneColor(theme, summary.tone) }]} accessibilityRole="header" aria-level={2}>
             {summary.title}
           </Text>
-          <Text style={[styles.text, dark && styles.textDark]}>{summary.text}</Text>
-          <Text style={[styles.text, dark && styles.textDark]}>
+          <Text style={styles.text}>{summary.text}</Text>
+          <Text style={styles.text}>
             {describeIncidentLocation(record, { nowMs: Date.now() })}
           </Text>
           {record.ledger?.length ? (
             <View role="list" aria-label="Alert status for each contact">
               {record.ledger.map((entry) => (
-                <LedgerRow key={entry.key} entry={entry} dark={dark} />
+                <LedgerRow key={entry.key} entry={entry} />
               ))}
             </View>
           ) : null}
         </>
       )}
 
-      {note ? <Text style={[styles.text, dark && styles.textDark]}>{note}</Text> : null}
+      {note ? <Text style={styles.text}>{note}</Text> : null}
 
       {unsent && !syncing && !suppressed ? (
         <AppButton
@@ -171,7 +173,7 @@ export default function IncidentStatusPanel({ hideIncidentId = null, dark = fals
             disabled={busy}
             onPress={() => setDialog(offer.duplicateRisk ? 'sms-again' : 'sms')}
           />
-          <Text style={[styles.subtle, dark && styles.subtleDark]}>
+          <Text style={styles.subtle}>
             Opens your Messages app. You must press send. Opening it does not mean the text was sent or delivered.
             Needs a SIM and mobile signal. This app cannot send the text by itself.
           </Text>
@@ -237,24 +239,22 @@ export default function IncidentStatusPanel({ hideIncidentId = null, dark = fals
   );
 }
 
-const styles = StyleSheet.create({
-  card: {
-    backgroundColor: tokens.color.surface,
-    borderRadius: tokens.radius.lg,
-    padding: tokens.spacing.lg,
-    borderWidth: 1,
-    borderColor: tokens.color.border,
-    borderLeftWidth: 4,
-    gap: tokens.spacing.sm,
-  },
-  cardDark: { backgroundColor: '#1E293B', borderColor: '#334155', marginTop: 12 },
-  title: { ...tokens.typography.title },
-  text: { fontSize: 16, lineHeight: 22, color: tokens.color.text },
-  textDark: { color: '#F8FAFC' },
-  subtle: { fontSize: 14, lineHeight: 20, color: tokens.color.textSubtle },
-  subtleDark: { color: '#94A3B8' },
-  row: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: tokens.color.border, gap: 2 },
-  rowDark: { borderBottomColor: '#334155' },
-  rowName: { fontSize: 16, fontWeight: '700', color: tokens.color.text },
-  rowStatus: { fontSize: 15, lineHeight: 21 },
-});
+function createStyles(theme) {
+  return {
+    card: {
+      backgroundColor: theme.color.surface,
+      borderRadius: theme.radius.lg,
+      padding: theme.spacing.lg,
+      borderWidth: 1,
+      borderColor: theme.color.border,
+      borderLeftWidth: 4,
+      gap: theme.spacing.sm,
+    },
+    title: { ...theme.typography.title, color: theme.color.text },
+    text: { fontSize: 16, lineHeight: 22, color: theme.color.text },
+    subtle: { fontSize: 14, lineHeight: 20, color: theme.color.textSubtle },
+    row: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: theme.color.border, gap: 2 },
+    rowName: { fontSize: 16, fontWeight: '700', color: theme.color.text },
+    rowStatus: { fontSize: 15, lineHeight: 21 },
+  };
+}

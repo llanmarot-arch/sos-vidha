@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, ScrollView } from 'react-native';
 import ScreenHeader from '../../components/ScreenHeader';
 import LiveMap from '../../components/LiveMap';
 import BlackBoxPanel from '../../components/BlackBoxPanel';
 import LiveLocationSharePanel from '../../components/LiveLocationSharePanel';
-import { tokens } from '../../theme/tokens';
+import { useThemedStyles } from '../../theme/useTheme';
 import { useSOSFlowStore } from '../../store/useSOSFlowStore';
 import { useBlackBoxStore } from '../../store/useBlackBoxStore';
 import { useContactsStore } from '../../store/useContactsStore';
@@ -20,6 +20,7 @@ import {
 import { LoadingState } from '../../components/UiStates';
 import { SOS_STATES } from '../../theme/tokens';
 import { describeLocationError } from '../../services/apiClientPolicy';
+import { useI18n } from '../../i18n/useI18n';
 
 const STALE_FIX_MS = 60 * 1000;
 
@@ -40,6 +41,8 @@ function TelemetryRow({ label, value }) {
 }
 
 export default function WebLiveSessionScreen() {
+  const { styles } = useThemedStyles(createStyles);
+  const { t } = useI18n();
   const sessionId = useSOSFlowStore((s) => s.sessionId);
   const trackingUrl = useSOSFlowStore((s) => s.trackingUrl);
   const alertStartedAt = useSOSFlowStore((s) => s.alertStartedAt);
@@ -97,7 +100,7 @@ export default function WebLiveSessionScreen() {
     };
   }, [sessionId, alertStartedAt]);
 
-  if (loading) return <LoadingState message="Finding your location…" />;
+  if (loading) return <LoadingState message={t('live.finding')} />;
 
   const isActive = Boolean(sessionId) || sosState === SOS_STATES.ACTIVE_ALERT;
   const fixAgeMs = location ? Date.now() - location.timestamp : null;
@@ -106,15 +109,15 @@ export default function WebLiveSessionScreen() {
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.content}>
       <ScreenHeader
-        title="My location"
+        title={t('live.title')}
         subtitle={
           isActive
             ? offline
-              ? 'SOS is active, but live sharing is paused: this device is offline.'
-              : `Sharing live with your contacts for ${elapsed}`
-            : 'Only you can see this until you share it.'
+              ? t('live.sharingPaused')
+              : t('live.sharingFor', { elapsed })
+            : t('live.onlyYou')
         }
-        status={isActive ? (offline ? 'Not updating' : 'Sharing live') : 'Location on'}
+        status={isActive ? (offline ? t('live.notUpdating') : t('live.sharingLive')) : t('live.locationOn')}
       />
 
       {isActive && offline ? (
@@ -215,42 +218,44 @@ export default function WebLiveSessionScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: tokens.color.bg0 },
-  content: { padding: tokens.spacing.lg, paddingBottom: 40 },
+function createStyles(theme) {
+  return {
+  root: { flex: 1, backgroundColor: theme.color.bg0 },
+  content: { padding: theme.spacing.lg, paddingBottom: 40 },
   broadcastCard: {
-    backgroundColor: tokens.color.successSoft,
-    borderRadius: tokens.radius.lg,
-    padding: tokens.spacing.lg,
-    marginBottom: tokens.spacing.md,
+    backgroundColor: theme.color.successSoft,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.lg,
+    marginBottom: theme.spacing.md,
     borderLeftWidth: 4,
-    borderLeftColor: tokens.color.success,
+    borderLeftColor: theme.color.success,
   },
-  broadcastLabel: { ...tokens.typography.title, color: tokens.color.success },
-  broadcastValue: { color: tokens.color.text, marginTop: 4, fontSize: 16, lineHeight: 22 },
-  trackUrl: { ...tokens.typography.mono, color: tokens.color.textMuted, marginTop: 6 },
-  mockNote: { color: tokens.color.textSubtle, fontSize: 14, marginTop: 6 },
-  unavailable: { flex: 1, justifyContent: 'center', padding: tokens.spacing.lg, backgroundColor: tokens.color.warningSoft, gap: 6 },
-  unavailableTitle: { ...tokens.typography.title, color: tokens.color.warning },
-  unavailableText: { fontSize: 16, lineHeight: 22, color: tokens.color.text },
-  staleNote: { color: tokens.color.warning, fontSize: 15, lineHeight: 22, marginBottom: tokens.spacing.md },
-  mapWrap: { height: 280, borderRadius: tokens.radius.lg, overflow: 'hidden', marginBottom: tokens.spacing.lg, borderWidth: 1, borderColor: tokens.color.border },
-  telemetryTitle: { ...tokens.typography.title, color: tokens.color.text, marginBottom: tokens.spacing.sm },
+  broadcastLabel: { ...theme.typography.title, color: theme.color.success },
+  broadcastValue: { color: theme.color.text, marginTop: 4, fontSize: 16, lineHeight: 22 },
+  trackUrl: { ...theme.typography.mono, color: theme.color.textMuted, marginTop: 6 },
+  mockNote: { color: theme.color.textSubtle, fontSize: 14, marginTop: 6 },
+  unavailable: { flex: 1, justifyContent: 'center', padding: theme.spacing.lg, backgroundColor: theme.color.warningSoft, gap: 6 },
+  unavailableTitle: { ...theme.typography.title, color: theme.color.warning },
+  unavailableText: { fontSize: 16, lineHeight: 22, color: theme.color.text },
+  staleNote: { color: theme.color.warning, fontSize: 15, lineHeight: 22, marginBottom: theme.spacing.md },
+  mapWrap: { height: 280, borderRadius: theme.radius.lg, overflow: 'hidden', marginBottom: theme.spacing.lg, borderWidth: 1, borderColor: theme.color.border },
+  telemetryTitle: { ...theme.typography.title, color: theme.color.text, marginBottom: theme.spacing.sm },
   telemetry: {
-    backgroundColor: tokens.color.surface,
-    borderRadius: tokens.radius.lg,
-    padding: tokens.spacing.lg,
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.lg,
     borderWidth: 1,
-    borderColor: tokens.color.border,
-    marginBottom: tokens.spacing.md,
+    borderColor: theme.color.border,
+    marginBottom: theme.spacing.md,
   },
   row: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: tokens.color.border,
+    borderBottomColor: theme.color.border,
   },
-  rowLabel: { color: tokens.color.textMuted, fontSize: 15 },
-  rowValue: { color: tokens.color.text, fontWeight: '700', fontSize: 15 },
-});
+  rowLabel: { color: theme.color.textMuted, fontSize: 15 },
+  rowValue: { color: theme.color.text, fontWeight: '700', fontSize: 15 },
+};
+}

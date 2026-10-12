@@ -5,7 +5,23 @@ import WebApp from './web/WebApp';
 import AuthFlow from './web/AuthFlow';
 import { LoadingState } from './components/UiStates';
 import { useAuthStore } from './store/useAuthStore';
+import { useSettingsStore } from './store/useSettingsStore';
+import { applyLiveAppearance } from './theme/appearance';
+import { applyDocumentLocale } from './i18n/locale';
 import { isSupabaseConfigured } from './lib/supabaseClient';
+
+function ThemeBootstrap({ children }) {
+  const loadSettings = useSettingsStore((s) => s.loadSettings);
+
+  useEffect(() => {
+    const current = useSettingsStore.getState();
+    applyLiveAppearance(current);
+    applyDocumentLocale(current.locale);
+    loadSettings();
+  }, [loadSettings]);
+
+  return children;
+}
 
 function NativeAuthGate() {
   const initialized = useAuthStore((s) => s.initialized);
@@ -28,8 +44,5 @@ function NativeAuthGate() {
 }
 
 export default function App() {
-  if (Platform.OS === 'web') {
-    return <WebApp />;
-  }
-  return <NativeAuthGate />;
+  return <ThemeBootstrap>{Platform.OS === 'web' ? <WebApp /> : <NativeAuthGate />}</ThemeBootstrap>;
 }

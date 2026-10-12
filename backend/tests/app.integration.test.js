@@ -39,8 +39,14 @@ function fakeProvider(failWith = null) {
 
 let active = [];
 
-async function harness({ env = {}, provider = fakeProvider(), contacts = CONTACTS } = {}) {
-  const clock = { t: START };
+async function harness({
+  env = {},
+  provider = fakeProvider(),
+  contacts = CONTACTS,
+  incidents: sharedIncidents = null,
+  clock: sharedClock = null,
+} = {}) {
+  const clock = sharedClock || { t: START };
   const config = loadConfig({
     NODE_ENV: 'test',
     SUPABASE_URL: 'https://example.supabase.co',
@@ -55,7 +61,7 @@ async function harness({ env = {}, provider = fakeProvider(), contacts = CONTACT
     SMS_RETRY_BASE_MS: '1',
     ...env,
   });
-  const incidents = new MemoryIncidentRepository({ now: () => clock.t });
+  const incidents = sharedIncidents || new MemoryIncidentRepository({ now: () => clock.t });
   const accounts = {
     verifyAccessToken: async (token) => USERS[token] || null,
     getEmergencyContacts: async (userId) => contacts[userId] || [],
@@ -144,6 +150,9 @@ function once(socket, event, timeoutMs = 2000) {
 describe('SOS start and recipient selection', () => {
   it('rejects unauthenticated and invalid-token requests without sending anything', async () => {
     const h = await harness();
+    const health = await api(h, 'GET', '/health');
+    assert.equal(health.status, 200);
+    assert.deepEqual(health.json, { ok: true });
     const anon = await api(h, 'POST', '/api/session/start', { body: startBody(h) });
     assert.equal(anon.status, 401);
     const bad = await api(h, 'POST', '/api/session/start', { token: 'forged', body: startBody(h) });
@@ -281,7 +290,7 @@ describe('offline-first delayed sync', () => {
     const first = await api(h, 'POST', '/api/session/start', { token: 'token-a', body });
     await h.sos.waitForIdle();
     assert.equal(first.status, 201);
-    // Simulates the phone never seeing the first response, then a server restart dropping in-memory sessions.
+    // No encryption key in this harness, so the capability cannot be restored. The retry must not invent one or resend.
     h.sos.sessionStore.sessions.delete(first.json.sessionId);
     h.clock.t += 5 * 60 * 1000;
     const retry = await api(h, 'POST', '/api/session/start', { token: 'token-a', body });
@@ -290,6 +299,8 @@ describe('offline-first delayed sync', () => {
     assert.equal(retry.json.code, 'INCIDENT_EXISTS');
     assert.equal(retry.json.incidentId, first.json.sessionId);
     assert.equal(retry.json.disarmToken, undefined);
+    assert.equal(retry.json.deliveries.length, 2);
+    assert.ok(retry.json.deliveries.every((d) => d.status === 'accepted'));
     assert.equal(h.provider.calls.length, 2);
     const alerts = await api(h, 'GET', `/api/session/${first.json.sessionId}/alerts`, { token: 'token-a' });
     assert.equal(alerts.status, 200);
@@ -456,6 +467,51 @@ describe('tracking capability', () => {
     assert.equal(page.status, 200);
     assert.match(page.text, /<meta name="referrer" content="strict-origin"\/>/);
     assert.equal(page.headers.get('referrer-policy'), 'strict-origin');
+    assert.equal(page.headers.get('x-frame-options'), 'DENY');
+    assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  });
+
+  it('rejects a capability with trailing content and does not reflect it', async () => {
+    const h = await harness();
+    const { json } = await startSos(h);
+    const t = trackerToken(json.trackingUrl);
+    const poisoned = `${t}</script><script>window.__xss=1</script>`;
+    const page = await api(h, 'GET', `/track/${json.sessionId}?t=${encodeURIComponent(poisoned)}`);
+    assert.equal(page.status, 403);
+    assert.equal(page.text.includes('__xss'), false);
+    assert.equal(page.text.includes(t), false);
+
+    const read = await api(h, 'GET', `/api/session/${json.sessionId}?t=${encodeURIComponent(poisoned)}`);
+    assert.equal(read.status, 403);
+
+    const tracker = await connect(h);
+    tracker.emit('join-tracker', { sessionId: json.sessionId, trackerToken: poisoned });
+    assert.equal((await once(tracker, 'ERROR')).code, 'UNAUTHORIZED');
+  });
+
+  it('locks further disarm attempts after repeated failures', async () => {
+    const h = await harness({ env: { DISARM_MAX_ATTEMPTS: '2' } });
+    const { json } = await startSos(h);
+    const wrong = { sessionId: json.sessionId, pinHash: 'c'.repeat(64) };
+    assert.equal((await api(h, 'POST', '/api/session/disarm', { token: 'token-a', body: wrong })).status, 401);
+    assert.equal((await api(h, 'POST', '/api/session/disarm', { token: 'token-a', body: wrong })).status, 401);
+    const locked = await api(h, 'POST', '/api/session/disarm', {
+      token: 'token-a',
+      body: { sessionId: json.sessionId, method: 'BIOMETRIC', disarmToken: json.disarmToken },
+    });
+    assert.equal(locked.status, 429);
+    assert.equal(locked.json.code, 'RATE_LIMITED');
+    assert.equal(h.sos.sessionStore.get(json.sessionId).status, 'EMERGENCY');
+  });
+
+  it('does not let unauthenticated requests consume an account SOS limit', async () => {
+    const h = await harness({ env: { SESSION_START_MAX_PER_IP: '2', SESSION_START_MAX_PER_USER: '4' } });
+    for (let i = 0; i < 3; i += 1) {
+      const anon = await api(h, 'POST', '/api/session/start', { body: startBody(h) });
+      assert.equal(anon.status, 401);
+    }
+    const ok = await startSos(h);
+    assert.equal(ok.status, 201);
   });
 
   it('rejects invalid, expired and revoked capabilities', async () => {
@@ -586,6 +642,36 @@ describe('provider status callbacks', () => {
     alerts = await api(h, 'GET', `/api/session/${json.sessionId}/alerts`, { token: 'token-a' });
     assert.equal(alerts.json.deliveries.filter((d) => d.status === 'delivered').length, 1);
   });
+
+  it('rejects forged callbacks and does not let duplicates or older statuses move a delivery backwards', async () => {
+    const h = await harness();
+    const { json } = await startSos(h);
+    const post = (sid, status, signature = 'valid-signature') =>
+      fetch(`${h.base}/api/twilio/status`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          ...(signature ? { 'X-Twilio-Signature': signature } : {}),
+        },
+        body: `MessageSid=${sid}&MessageStatus=${status}`,
+      });
+
+    assert.equal((await post('SM1', 'delivered', null)).status, 403);
+    assert.equal((await post('SM1', 'delivered', 'forged')).status, 403);
+    let alerts = await api(h, 'GET', `/api/session/${json.sessionId}/alerts`, { token: 'token-a' });
+    assert.ok(alerts.json.deliveries.every((d) => d.status === 'accepted'));
+
+    assert.equal((await post('SM1', 'delivered')).status, 204);
+    assert.equal((await post('SM1', 'delivered')).status, 204);
+    assert.equal((await post('SM1', 'sent')).status, 204);
+    assert.equal((await post('SM1', 'queued')).status, 204);
+    assert.equal((await post('SM9', 'delivered')).status, 204);
+    alerts = await api(h, 'GET', `/api/session/${json.sessionId}/alerts`, { token: 'token-a' });
+    const byId = Object.fromEntries(alerts.json.deliveries.map((d) => [d.providerMessageId, d.status]));
+    assert.equal(byId.SM1, 'delivered');
+    assert.equal(byId.SM2, 'accepted');
+    assert.equal(alerts.json.deliveries.filter((d) => d.status === 'delivered').length, 1);
+  });
 });
 
 describe('dry-run safety', () => {
@@ -596,5 +682,247 @@ describe('dry-run safety', () => {
     assert.equal(h.provider.calls.length, 0);
     const alerts = await api(h, 'GET', `/api/session/${json.sessionId}/alerts`, { token: 'token-a' });
     assert.deepEqual(alerts.json.deliveries.map((d) => d.status), ['dry_run', 'dry_run']);
+  });
+});
+
+const RECOVERY_KEY = '11'.repeat(32);
+
+function rewindDeliveries(incidents, incidentId, status, { leaseUntil = null } = {}) {
+  for (const delivery of incidents.deliveries.values()) {
+    if (delivery.incidentId !== incidentId) continue;
+    delivery.status = status;
+    delivery.providerMessageSid = null;
+    delivery.leaseUntil = leaseUntil;
+    delivery.acceptedAt = null;
+    for (const [sid, id] of incidents.sidIndex.entries()) {
+      if (id === delivery.id) incidents.sidIndex.delete(sid);
+    }
+  }
+}
+
+describe('durable incident recovery', () => {
+  it('restores an active incident after a restart and does not resend or revive a stopped one', async () => {
+    const provider = fakeProvider();
+    const clock = { t: START };
+    const incidents = new MemoryIncidentRepository({ now: () => clock.t });
+    const env = { DATA_ENCRYPTION_KEY: RECOVERY_KEY };
+    const h1 = await harness({ env, provider, incidents, clock });
+    const body = startBody(h1);
+    const first = await api(h1, 'POST', '/api/session/start', { token: 'token-a', body });
+    await h1.sos.waitForIdle();
+    assert.equal(first.status, 201);
+    const stoppedBody = startBody(h1);
+    const stopped = await api(h1, 'POST', '/api/session/start', { token: 'token-a', body: stoppedBody });
+    await h1.sos.waitForIdle();
+    const disarm = await api(h1, 'POST', '/api/session/disarm', {
+      token: 'token-a',
+      body: { sessionId: stopped.json.sessionId, method: 'BIOMETRIC', disarmToken: stopped.json.disarmToken },
+    });
+    assert.equal(disarm.status, 200);
+    const sends = provider.calls.length;
+
+    const h2 = await harness({ env, provider, incidents, clock });
+    const recovered = await h2.sos.recover();
+    assert.equal(recovered.restored, 1);
+    assert.equal(provider.calls.length, sends);
+    assert.equal(h2.sos.sessionStore.get(first.json.sessionId).status, 'EMERGENCY');
+    assert.equal(h2.sos.sessionStore.get(first.json.sessionId).disarmToken, first.json.disarmToken);
+    assert.equal(h2.sos.sessionStore.get(stopped.json.sessionId), null);
+
+    const retry = await api(h2, 'POST', '/api/session/start', { token: 'token-a', body });
+    assert.equal(retry.status, 200);
+    assert.equal(retry.json.reused, true);
+    assert.equal(retry.json.sessionId, first.json.sessionId);
+    assert.equal(retry.json.deliveries.length, 2);
+    assert.ok(retry.json.deliveries.every((d) => d.status === 'accepted' && d.status !== 'delivered'));
+    assert.equal(provider.calls.length, sends);
+    assert.equal(JSON.stringify(retry.json).includes('runtimeEnc'), false);
+    assert.equal(JSON.stringify(retry.json).includes('+919800000001'), false);
+
+    const otherAlerts = await api(h2, 'GET', `/api/session/${first.json.sessionId}/alerts`, { token: 'token-b' });
+    const otherSession = await api(h2, 'GET', `/api/session/${first.json.sessionId}`, { token: 'token-b' });
+    const otherTrack = await api(h2, 'GET', `/track/${first.json.sessionId}`);
+    assert.equal(otherAlerts.status, 404);
+    assert.equal(otherSession.status, 403);
+    assert.equal(otherTrack.status, 403);
+    const owner = await api(h2, 'GET', `/api/session/${first.json.sessionId}`, { token: 'token-a' });
+    assert.equal(owner.status, 200);
+    assert.equal(owner.json.location.latitude, 28.61);
+    assert.equal(JSON.stringify(otherSession.json || {}).includes('28.61'), false);
+
+    h2.sos.sessionStore.sessions.delete(first.json.sessionId);
+    await h2.sos.recover();
+    assert.equal(h2.sos.sessionStore.get(stopped.json.sessionId), null);
+    const revived = h2.sos.sessionStore.get(first.json.sessionId);
+    assert.equal(revived.status, 'EMERGENCY');
+    await api(h2, 'POST', '/api/session/disarm', {
+      token: 'token-a',
+      body: { sessionId: first.json.sessionId, method: 'BIOMETRIC', disarmToken: first.json.disarmToken },
+    });
+    h2.sos.sessionStore.sessions.delete(first.json.sessionId);
+    await h2.sos.recover();
+    assert.equal(h2.sos.sessionStore.get(first.json.sessionId), null);
+    assert.equal(provider.calls.length, sends);
+  });
+
+  it('sends a pending alert once after a crash before provider dispatch, including under two workers', async () => {
+    const provider = fakeProvider();
+    const clock = { t: START };
+    const incidents = new MemoryIncidentRepository({ now: () => clock.t });
+    const env = { DATA_ENCRYPTION_KEY: RECOVERY_KEY };
+    const h = await harness({ env, provider, incidents, clock });
+    const started = await startSos(h);
+    rewindDeliveries(incidents, started.json.sessionId, 'pending');
+    const before = provider.calls.length;
+    h.sos.sessionStore.sessions.delete(started.json.sessionId);
+
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    provider.send = async (message) => {
+      provider.calls.push(message);
+      await gate;
+      return { sid: `SM-R${provider.calls.length}`, status: 'queued' };
+    };
+    const first = h.sos.recover();
+    const second = h.sos.recover();
+    try {
+      const deadline = Date.now() + 2000;
+      while (provider.calls.length - before < 2 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(provider.calls.length - before, 2);
+    } finally {
+      release();
+    }
+    await Promise.all([first, second]);
+    assert.equal(provider.calls.length - before, 2);
+    const alerts = await api(h, 'GET', `/api/session/${started.json.sessionId}/alerts`, { token: 'token-a' });
+    assert.ok(alerts.json.deliveries.every((d) => d.status === 'accepted'));
+    await h.sos.recover();
+    assert.equal(provider.calls.length - before, 2);
+  });
+
+  it('adopts a provider record after a crash and otherwise keeps the outcome unknown', async () => {
+    const provider = fakeProvider();
+    const clock = { t: START };
+    const incidents = new MemoryIncidentRepository({ now: () => clock.t });
+    const h = await harness({ env: { DATA_ENCRYPTION_KEY: RECOVERY_KEY }, provider, incidents, clock });
+    const started = await startSos(h);
+    const before = provider.calls.length;
+
+    provider.findRecentMessage = async () => ({ supported: true, match: { sid: 'SM-adopted', status: 'queued' } });
+    rewindDeliveries(incidents, started.json.sessionId, 'sending', { leaseUntil: clock.t - 1000 });
+    h.sos.sessionStore.sessions.delete(started.json.sessionId);
+    await h.sos.recover();
+    assert.equal(provider.calls.length, before);
+    let alerts = await api(h, 'GET', `/api/session/${started.json.sessionId}/alerts`, { token: 'token-a' });
+    assert.ok(alerts.json.deliveries.every((d) => d.status === 'accepted'));
+    assert.ok(alerts.json.deliveries.every((d) => d.providerMessageId === 'SM-adopted'));
+    assert.ok(alerts.json.deliveries.every((d) => d.status !== 'delivered'));
+
+    provider.findRecentMessage = async () => ({ supported: true, match: null });
+    rewindDeliveries(incidents, started.json.sessionId, 'sending', { leaseUntil: clock.t - 1000 });
+    await h.sos.recover();
+    assert.equal(provider.calls.length, before);
+    alerts = await api(h, 'GET', `/api/session/${started.json.sessionId}/alerts`, { token: 'token-a' });
+    assert.ok(alerts.json.deliveries.every((d) => d.status === 'unconfirmed'));
+
+    provider.findRecentMessage = async () => ({ supported: false, match: null });
+    rewindDeliveries(incidents, started.json.sessionId, 'sending', { leaseUntil: clock.t - 1000 });
+    await h.sos.recover();
+    alerts = await api(h, 'GET', `/api/session/${started.json.sessionId}/alerts`, { token: 'token-a' });
+    assert.ok(alerts.json.deliveries.every((d) => d.status === 'unconfirmed' && d.status !== 'delivered'));
+    assert.equal(provider.calls.length, before);
+  });
+
+  it('does not restore or resend when the encryption key is missing', async () => {
+    const provider = fakeProvider();
+    const clock = { t: START };
+    const incidents = new MemoryIncidentRepository({ now: () => clock.t });
+    const h1 = await harness({ provider, incidents, clock });
+    const body = startBody(h1);
+    const first = await api(h1, 'POST', '/api/session/start', { token: 'token-a', body });
+    await h1.sos.waitForIdle();
+    rewindDeliveries(incidents, first.json.sessionId, 'pending');
+    const sends = provider.calls.length;
+    const h2 = await harness({ provider, incidents, clock });
+    const recovered = await h2.sos.recover();
+    assert.equal(h2.sos.sessionStore.get(first.json.sessionId), null);
+    assert.ok(recovered.quarantined >= 2);
+    assert.equal(provider.calls.length, sends);
+    const retry = await api(h2, 'POST', '/api/session/start', { token: 'token-a', body });
+    assert.equal(retry.status, 409);
+    assert.ok(retry.json.deliveries.every((d) => d.status === 'unconfirmed' && d.status !== 'delivered'));
+    const { validateStartupConfig, loadConfig } = require('../lib/config');
+    const partial = loadConfig({
+      NODE_ENV: 'production',
+      SUPABASE_URL: 'https://x.supabase.co',
+      DATA_ENCRYPTION_KEY: RECOVERY_KEY,
+      PUBLIC_SERVER_URL: 'https://sos.example.org',
+      TWILIO_ACCOUNT_SID: 'AC',
+      TWILIO_AUTH_TOKEN: 'tok',
+      TWILIO_PHONE_NUMBER: '+15550000000',
+    });
+    assert.match(validateStartupConfig(partial).errors.join(' '), /partial authentication/);
+  });
+});
+
+describe('PIN migration and production CORS', () => {
+  it('stores a slow PIN hash, rejects the hash as a disarm token, and locks out failures', async () => {
+    const h = await harness({ env: { DATA_ENCRYPTION_KEY: RECOVERY_KEY, DISARM_MAX_ATTEMPTS: '2' } });
+    const started = await startSos(h, 'token-a', { standardPin: '1234', duressPin: '9999' });
+    const stored = h.sos.sessionStore.get(started.json.sessionId).standardPinHash;
+    assert.match(stored, /^scrypt1\$/);
+    const passed = await api(h, 'POST', '/api/session/disarm', {
+      token: 'token-a',
+      body: { sessionId: started.json.sessionId, pinHash: stored },
+    });
+    assert.equal(passed.status, 401);
+    assert.equal(h.sos.sessionStore.get(started.json.sessionId).status, 'EMERGENCY');
+    const stopped = await api(h, 'POST', '/api/session/disarm', {
+      token: 'token-a',
+      body: { sessionId: started.json.sessionId, pin: '1234' },
+    });
+    assert.equal(stopped.status, 200);
+    assert.equal(h.sos.sessionStore.get(started.json.sessionId).status, 'DISARMED');
+
+    const other = await startSos(h, 'token-a', { standardPin: '1234', duressPin: '9999' });
+    assert.equal(
+      (await api(h, 'POST', '/api/session/disarm', { token: 'token-a', body: { sessionId: other.json.sessionId, pin: '0000' } })).status,
+      401
+    );
+    assert.equal(
+      (await api(h, 'POST', '/api/session/disarm', { token: 'token-a', body: { sessionId: other.json.sessionId, pin: '0000' } })).status,
+      401
+    );
+    const locked = await api(h, 'POST', '/api/session/disarm', {
+      token: 'token-a',
+      body: { sessionId: other.json.sessionId, pin: '1234' },
+    });
+    assert.equal(locked.status, 429);
+    assert.equal(h.sos.sessionStore.get(other.json.sessionId).status, 'EMERGENCY');
+  });
+
+  it('allows only configured browser origins in production', async () => {
+    const h = await harness({
+      env: { NODE_ENV: 'production', CORS_ORIGINS: 'https://app.sos.example', DATA_ENCRYPTION_KEY: RECOVERY_KEY },
+    });
+    const evil = await fetch(`${h.base}/health`, { headers: { Origin: 'https://evil.example' } });
+    assert.equal(evil.status, 200);
+    assert.notEqual(evil.headers.get('access-control-allow-origin'), 'https://evil.example');
+    assert.notEqual(evil.headers.get('access-control-allow-origin'), '*');
+    const allowed = await fetch(`${h.base}/health`, { headers: { Origin: 'https://app.sos.example' } });
+    assert.equal(allowed.headers.get('access-control-allow-origin'), 'https://app.sos.example');
+    const socket = await fetch(`${h.base}/socket.io/?EIO=4&transport=polling`, {
+      headers: { Origin: 'https://evil.example' },
+    });
+    assert.notEqual(socket.headers.get('access-control-allow-origin'), 'https://evil.example');
+    assert.notEqual(socket.headers.get('access-control-allow-origin'), '*');
+
+    const dev = await harness();
+    const open = await fetch(`${dev.base}/health`, { headers: { Origin: 'https://evil.example' } });
+    assert.equal(open.headers.get('access-control-allow-origin'), '*');
   });
 });

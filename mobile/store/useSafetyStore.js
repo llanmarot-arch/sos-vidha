@@ -1,5 +1,14 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
+import { loadRegularPin, saveRegularPin } from '../services/pinStorage';
+
+const PIN_OPTIONS = { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY };
+const securePinStore = {
+  getItemAsync: (key) => SecureStore.getItemAsync(key, PIN_OPTIONS),
+  setItemAsync: (key, value) => SecureStore.setItemAsync(key, value, PIN_OPTIONS),
+  deleteItemAsync: (key) => SecureStore.deleteItemAsync(key, PIN_OPTIONS),
+};
 
 const STORAGE_KEYS = {
   CONTACTS: '@sosvidha/contacts',
@@ -102,10 +111,8 @@ export const useSafetyStore = create((set, get) => ({
 
   persistProfile: async () => {
     const { userPhone, contact1, contact2, regularPin } = get();
-    await AsyncStorage.multiSet([
-      [STORAGE_KEYS.CONTACTS, JSON.stringify({ userPhone, contact1, contact2 })],
-      [STORAGE_KEYS.REGULAR_PIN, regularPin],
-    ]);
+    await AsyncStorage.setItem(STORAGE_KEYS.CONTACTS, JSON.stringify({ userPhone, contact1, contact2 }));
+    await saveRegularPin(regularPin, { asyncStorage: AsyncStorage, secureStore: securePinStore });
   },
 
   persistActiveSession: async (sessionMeta) => {
@@ -117,17 +124,10 @@ export const useSafetyStore = create((set, get) => ({
   },
 
   loadProfile: async () => {
-    const [[, contactsRaw], [, regularPinRaw]] = await AsyncStorage.multiGet([
-      STORAGE_KEYS.CONTACTS,
-      STORAGE_KEYS.REGULAR_PIN,
-    ]);
-
-    if (contactsRaw) {
-      set(JSON.parse(contactsRaw));
-    }
-    if (regularPinRaw) {
-      set({ regularPin: regularPinRaw });
-    }
+    const contactsRaw = await AsyncStorage.getItem(STORAGE_KEYS.CONTACTS);
+    if (contactsRaw) set(JSON.parse(contactsRaw));
+    const loaded = await loadRegularPin({ asyncStorage: AsyncStorage, secureStore: securePinStore });
+    if (loaded.pin) set({ regularPin: loaded.pin });
   },
 
   getActiveSessionFromStorage: async () => {

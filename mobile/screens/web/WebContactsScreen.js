@@ -1,14 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import ScreenHeader from '../../components/ScreenHeader';
 import AppButton from '../../components/AppButton';
 import FormField from '../../components/FormField';
 import ConfirmDialog from '../../components/ConfirmDialog';
-import { tokens } from '../../theme/tokens';
+import { useThemedStyles } from '../../theme/useTheme';
 import { useContactsStore, validatePhone } from '../../store/useContactsStore';
 import { LoadingState, EmptyState, SuccessBanner } from '../../components/UiStates';
+import { useI18n } from '../../i18n/useI18n';
 
 export default function WebContactsScreen({ userId }) {
+  const { styles } = useThemedStyles(createStyles);
+  const { t } = useI18n();
   const { contacts, loading, error, saveStatus, requiresAuth, loadContacts, addContact, updateContact, deleteContact, clearError } =
     useContactsStore();
   const [name, setName] = useState('');
@@ -35,12 +38,12 @@ export default function WebContactsScreen({ userId }) {
   const handleSave = async () => {
     if (!name.trim()) {
       clearError();
-      setErrorLocal('Please enter a name.');
+      setErrorLocal(t('contacts.nameRequired'));
       return;
     }
     if (!validatePhone(phone)) {
       clearError();
-      setErrorLocal('Enter the mobile number with country code, for example +919876543210.');
+      setErrorLocal(t('contacts.phoneInvalid'));
       return;
     }
 
@@ -68,30 +71,30 @@ export default function WebContactsScreen({ userId }) {
     setDeleteTarget(null);
   };
 
-  if (loading) return <LoadingState message="Loading your contacts…" />;
+  if (loading) return <LoadingState message={t('contacts.loading')} />;
 
   if (requiresAuth) {
     return (
       <EmptyState
-        title="Please sign in"
-        description="Your emergency contacts are saved to your account. Sign in to add or change them."
+        title={t('contacts.signInTitle')}
+        description={t('contacts.signInDesc')}
       />
     );
   }
 
   const displayError = localError || error;
-  const countLabel = `${contacts.length} saved`;
+  const countLabel = t('contacts.savedCount', { count: contacts.length });
 
   return (
     <>
       <ScrollView style={styles.root} contentContainerStyle={styles.content}>
         <ScreenHeader
-          title="Emergency contacts"
-          subtitle="These people get your SOS alert and live location."
+          title={t('contacts.title')}
+          subtitle={t('contacts.subtitle')}
           status={countLabel}
         />
 
-        {saveStatus === 'success' ? <SuccessBanner message="Contacts saved." /> : null}
+        {saveStatus === 'success' ? <SuccessBanner message={t('contacts.savedBanner')} /> : null}
         {displayError ? (
           <View style={styles.errorBox} accessibilityRole="alert">
             <Text style={styles.errorText}>{displayError}</Text>
@@ -100,36 +103,36 @@ export default function WebContactsScreen({ userId }) {
 
         <View style={styles.form}>
           <Text style={styles.formTitle} accessibilityRole="header" aria-level={2}>
-            {editingId ? 'Edit contact' : 'Add a contact'}
+            {editingId ? t('contacts.editTitle') : t('contacts.addTitle')}
           </Text>
-          <FormField label="Name" value={name} onChangeText={setName} placeholder="e.g. Priya Sharma" autoCapitalize="words" autoComplete="name" />
+          <FormField label={t('contacts.name')} value={name} onChangeText={setName} placeholder={t('contacts.namePlaceholder')} autoCapitalize="words" autoComplete="name" />
           <FormField
-            label="Mobile number"
-            hint="Include country code, e.g. +91 98765 43210"
+            label={t('contacts.mobile')}
+            hint={t('contacts.mobileHint')}
             value={phone}
             onChangeText={setPhone}
             placeholder="+919876543210"
             keyboardType="phone-pad"
             autoComplete="tel"
           />
-          <FormField label="Relationship (optional)" value={relationship} onChangeText={setRelationship} placeholder="e.g. Mother, Friend" autoCapitalize="words" />
+          <FormField label={t('contacts.relationship')} value={relationship} onChangeText={setRelationship} placeholder={t('contacts.relationshipPlaceholder')} autoCapitalize="words" />
           <View style={styles.formActions}>
             {editingId ? (
               <View style={styles.flex1}>
-                <AppButton label="Cancel" variant="ghost" onPress={resetForm} />
+                <AppButton label={t('contacts.cancel')} variant="ghost" onPress={resetForm} />
               </View>
             ) : null}
             <View style={styles.flex1}>
-              <AppButton label={editingId ? 'Save changes' : 'Add contact'} variant="primary" onPress={handleSave} loading={submitting} />
+              <AppButton label={editingId ? t('contacts.saveChanges') : t('contacts.addButton')} variant="primary" onPress={handleSave} loading={submitting} />
             </View>
           </View>
         </View>
 
         <Text style={styles.listTitle} accessibilityRole="header" aria-level={2}>
-          Your contacts
+          {t('contacts.yours')}
         </Text>
         {contacts.length === 0 ? (
-          <EmptyState title="No contacts yet" description="Add at least one person so SOS and WhatsApp location sharing can work." />
+          <EmptyState title={t('contacts.emptyTitle')} description={t('contacts.emptyDesc')} />
         ) : (
           contacts.map((contact) => (
             <View key={contact.id} style={styles.card}>
@@ -144,18 +147,18 @@ export default function WebContactsScreen({ userId }) {
                   style={styles.actionBtn}
                   onPress={() => startEdit(contact)}
                   accessibilityRole="button"
-                  accessibilityLabel={`Edit ${contact.name}`}
+                  accessibilityLabel={t('contacts.editA11y', { name: contact.name })}
                 >
-                  <Text style={styles.editBtn}>Edit</Text>
+                  <Text style={styles.editBtn}>{t('contacts.editTitle')}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   activeOpacity={0.7}
                   style={[styles.actionBtn, styles.deleteAction]}
                   onPress={() => setDeleteTarget(contact)}
                   accessibilityRole="button"
-                  accessibilityLabel={`Delete ${contact.name}`}
+                  accessibilityLabel={t('contacts.deleteA11y', { name: contact.name })}
                 >
-                  <Text style={styles.deleteBtn}>Delete</Text>
+                  <Text style={styles.deleteBtn}>{t('contacts.delete')}</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -165,10 +168,10 @@ export default function WebContactsScreen({ userId }) {
 
       <ConfirmDialog
         visible={Boolean(deleteTarget)}
-        title="Delete this contact?"
-        message={deleteTarget ? `${deleteTarget.name} will no longer get your SOS alerts. This can't be undone.` : ''}
-        confirmLabel={deleting ? 'Deleting…' : 'Delete'}
-        cancelLabel="Keep contact"
+        title={t('contacts.deleteTitle')}
+        message={deleteTarget ? t('contacts.deleteMessage', { name: deleteTarget.name }) : ''}
+        confirmLabel={deleting ? t('contacts.deleting') : t('contacts.delete')}
+        cancelLabel={t('contacts.keep')}
         destructive
         onConfirm={handleConfirmDelete}
         onCancel={() => !deleting && setDeleteTarget(null)}
@@ -177,33 +180,35 @@ export default function WebContactsScreen({ userId }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: tokens.color.bg0 },
-  content: { padding: tokens.spacing.lg, paddingBottom: 40 },
+function createStyles(theme) {
+  return {
+  root: { flex: 1, backgroundColor: theme.color.bg0 },
+  content: { padding: theme.spacing.lg, paddingBottom: 40 },
   flex1: { flex: 1 },
-  form: { backgroundColor: tokens.color.surface, borderRadius: tokens.radius.lg, padding: tokens.spacing.lg, marginBottom: tokens.spacing.lg, borderWidth: 1, borderColor: tokens.color.border },
-  formTitle: { ...tokens.typography.title, color: tokens.color.text, marginBottom: tokens.spacing.md },
-  formActions: { flexDirection: 'row', gap: tokens.spacing.sm },
-  listTitle: { ...tokens.typography.title, color: tokens.color.text, marginBottom: tokens.spacing.sm },
-  card: { backgroundColor: tokens.color.surface, borderRadius: tokens.radius.lg, padding: tokens.spacing.lg, marginBottom: tokens.spacing.sm, borderWidth: 1, borderColor: tokens.color.border },
-  cardBody: { marginBottom: tokens.spacing.sm, gap: 2 },
-  cardName: { color: tokens.color.text, fontWeight: '700', fontSize: 18 },
-  cardPhone: { color: tokens.color.text, fontSize: 16 },
-  cardRel: { color: tokens.color.textSubtle, fontSize: 15 },
-  cardActions: { flexDirection: 'row', gap: tokens.spacing.sm },
+  form: { backgroundColor: theme.color.surface, borderRadius: theme.radius.lg, padding: theme.spacing.lg, marginBottom: theme.spacing.lg, borderWidth: 1, borderColor: theme.color.border },
+  formTitle: { ...theme.typography.title, color: theme.color.text, marginBottom: theme.spacing.md },
+  formActions: { flexDirection: 'row', gap: theme.spacing.sm },
+  listTitle: { ...theme.typography.title, color: theme.color.text, marginBottom: theme.spacing.sm },
+  card: { backgroundColor: theme.color.surface, borderRadius: theme.radius.lg, padding: theme.spacing.lg, marginBottom: theme.spacing.sm, borderWidth: 1, borderColor: theme.color.border },
+  cardBody: { marginBottom: theme.spacing.sm, gap: 2 },
+  cardName: { color: theme.color.text, fontWeight: '700', fontSize: 18 },
+  cardPhone: { color: theme.color.text, fontSize: 16 },
+  cardRel: { color: theme.color.textSubtle, fontSize: 15 },
+  cardActions: { flexDirection: 'row', gap: theme.spacing.sm },
   actionBtn: {
     minHeight: 44,
     minWidth: 88,
-    paddingHorizontal: tokens.spacing.lg,
+    paddingHorizontal: theme.spacing.lg,
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: tokens.radius.md,
+    borderRadius: theme.radius.md,
     borderWidth: 1.5,
-    borderColor: tokens.color.primary,
+    borderColor: theme.color.accentOnSurface,
   },
-  deleteAction: { borderColor: tokens.color.critical },
-  editBtn: { color: tokens.color.primary, fontWeight: '700', fontSize: 16 },
-  deleteBtn: { color: tokens.color.critical, fontWeight: '700', fontSize: 16 },
-  errorBox: { backgroundColor: tokens.color.criticalSoft, borderRadius: tokens.radius.md, padding: tokens.spacing.md, marginBottom: tokens.spacing.md, borderLeftWidth: 4, borderLeftColor: tokens.color.critical },
-  errorText: { color: tokens.color.critical, fontWeight: '600', fontSize: 15, lineHeight: 22 },
-});
+  deleteAction: { borderColor: theme.color.critical },
+  editBtn: { color: theme.color.accentOnSurface, fontWeight: '700', fontSize: 16 },
+  deleteBtn: { color: theme.color.critical, fontWeight: '700', fontSize: 16 },
+  errorBox: { backgroundColor: theme.color.criticalSoft, borderRadius: theme.radius.md, padding: theme.spacing.md, marginBottom: theme.spacing.md, borderLeftWidth: 4, borderLeftColor: theme.color.critical },
+  errorText: { color: theme.color.critical, fontWeight: '600', fontSize: 15, lineHeight: 22 },
+};
+}

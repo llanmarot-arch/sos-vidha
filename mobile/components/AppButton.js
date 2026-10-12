@@ -1,6 +1,37 @@
 import React from 'react';
-import { TouchableOpacity, Text, ActivityIndicator, StyleSheet } from 'react-native';
-import { tokens } from '../theme/tokens';
+import { TouchableOpacity, Text, ActivityIndicator } from 'react-native';
+import { useThemedStyles } from '../theme/useTheme';
+
+function createStyles(theme) {
+  return {
+    base: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      minHeight: theme.minTouch,
+      borderRadius: theme.radius.md,
+      paddingVertical: 12,
+      paddingHorizontal: 18,
+    },
+    primary: {
+      backgroundColor: theme.color.primary,
+      borderWidth: theme.color.primaryBorderWidth,
+      borderColor: theme.color.primaryBorder,
+    },
+    critical: { backgroundColor: theme.color.criticalFill },
+    ghost: {
+      backgroundColor: theme.color.surface,
+      borderWidth: 1.5,
+      borderColor: theme.color.ghostBorder,
+    },
+    disabled: { opacity: 0.45 },
+    label: { fontWeight: '700', fontSize: 16, textAlign: 'center' },
+    labelPrimary: { color: theme.color.onPrimary },
+    labelCritical: { color: theme.color.onCritical },
+    labelGhost: { color: theme.color.ghostText },
+  };
+}
 
 export default function AppButton({
   label,
@@ -12,10 +43,12 @@ export default function AppButton({
   accessibilityHint,
   accessibilityLabel,
 }) {
+  const { theme, styles } = useThemedStyles(createStyles);
   const isPrimary = variant === 'primary';
   const isCritical = variant === 'critical';
   const isGhost = variant === 'ghost';
   const isDisabled = disabled || loading;
+  const spinnerColor = isGhost ? theme.color.ghostText : isCritical ? theme.color.onCritical : theme.color.onPrimary;
 
   return (
     <TouchableOpacity
@@ -35,7 +68,7 @@ export default function AppButton({
       ]}
     >
       {loading ? (
-        <ActivityIndicator color={isGhost ? styles.labelGhost.color : tokens.color.onPrimary} size="small" />
+        <ActivityIndicator color={spinnerColor} size="small" />
       ) : (
         <>
           {icon}
@@ -54,34 +87,3 @@ export default function AppButton({
     </TouchableOpacity>
   );
 }
-
-const styles = StyleSheet.create({
-  base: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    minHeight: tokens.minTouch,
-    borderRadius: tokens.radius.md,
-    paddingVertical: 12,
-    paddingHorizontal: 18,
-  },
-  primary: {
-    backgroundColor: tokens.color.primary,
-    borderWidth: tokens.accent === 'white' ? 1.5 : 0,
-    borderColor: tokens.color.borderStrong,
-  },
-  critical: { backgroundColor: tokens.color.criticalFill },
-  ghost: {
-    backgroundColor: tokens.color.surface,
-    borderWidth: 1.5,
-    borderColor: tokens.accent === 'white' && tokens.scheme === 'light' ? tokens.color.borderStrong : tokens.color.primary,
-  },
-  disabled: { opacity: 0.45 },
-  label: { fontWeight: '700', fontSize: 16, textAlign: 'center' },
-  labelPrimary: { color: tokens.color.onPrimary },
-  labelCritical: { color: tokens.color.onCritical },
-  labelGhost: {
-    color: tokens.accent === 'white' && tokens.scheme === 'light' ? tokens.color.text : tokens.color.primary,
-  },
-});

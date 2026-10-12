@@ -1,8 +1,66 @@
 import React from 'react';
-import { Modal, View, Text, StyleSheet, TouchableOpacity, Pressable } from 'react-native';
-import { tokens } from '../theme/tokens';
+import { Modal, View, Text, TouchableOpacity, Pressable } from 'react-native';
+import { useThemedStyles } from '../theme/useTheme';
 
-export default function ConfirmDialog({ visible, title, message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', destructive = false, onConfirm, onCancel }) {
+function createStyles(theme) {
+  return {
+    overlay: {
+      flex: 1,
+      backgroundColor: theme.color.overlay,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: theme.spacing.xl,
+    },
+    card: {
+      width: '100%',
+      maxWidth: 400,
+      backgroundColor: theme.color.surface,
+      borderRadius: theme.radius.lg,
+      padding: theme.spacing.xl,
+      borderWidth: 1,
+      borderColor: theme.color.border,
+    },
+    title: { color: theme.color.text, fontWeight: '700', fontSize: 20, marginBottom: theme.spacing.sm },
+    message: { color: theme.color.textMuted, fontSize: 16, lineHeight: 24, marginBottom: theme.spacing.lg },
+    actions: { flexDirection: 'row', gap: theme.spacing.sm },
+    cancelBtn: {
+      flex: 1,
+      minHeight: theme.minTouch,
+      borderWidth: 1.5,
+      borderColor: theme.color.ghostBorder,
+      borderRadius: theme.radius.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.color.surface,
+    },
+    cancelText: { color: theme.color.ghostText, fontWeight: '700', fontSize: 16 },
+    confirmBtn: {
+      flex: 1,
+      minHeight: theme.minTouch,
+      backgroundColor: theme.color.primary,
+      borderRadius: theme.radius.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: theme.color.primaryBorderWidth,
+      borderColor: theme.color.primaryBorder,
+    },
+    confirmDestructive: { backgroundColor: theme.color.criticalFill, borderWidth: 0 },
+    confirmText: { color: theme.color.onPrimary, fontWeight: '700', fontSize: 16 },
+    confirmTextDestructive: { color: theme.color.onCritical },
+  };
+}
+
+export default function ConfirmDialog({
+  visible,
+  title,
+  message,
+  confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
+  destructive = false,
+  onConfirm,
+  onCancel,
+}) {
+  const { styles } = useThemedStyles(createStyles);
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
       <Pressable style={styles.overlay} onPress={onCancel} accessibilityLabel="Close dialog">
@@ -36,48 +94,3 @@ export default function ConfirmDialog({ visible, title, message, confirmLabel = 
     </Modal>
   );
 }
-
-const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: tokens.color.overlay,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: tokens.spacing.xl,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 400,
-    backgroundColor: tokens.color.surface,
-    borderRadius: tokens.radius.lg,
-    padding: tokens.spacing.xl,
-  },
-  title: { color: tokens.color.text, fontWeight: '700', fontSize: 20, marginBottom: tokens.spacing.sm },
-  message: { color: tokens.color.textMuted, fontSize: 16, lineHeight: 24, marginBottom: tokens.spacing.lg },
-  actions: { flexDirection: 'row', gap: tokens.spacing.sm },
-  cancelBtn: {
-    flex: 1,
-    minHeight: tokens.minTouch,
-    borderWidth: 1.5,
-    borderColor: tokens.accent === 'white' && tokens.scheme === 'light' ? tokens.color.borderStrong : tokens.color.primary,
-    borderRadius: tokens.radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cancelText: {
-    color: tokens.accent === 'white' && tokens.scheme === 'light' ? tokens.color.text : tokens.color.primary,
-    fontWeight: '700',
-    fontSize: 16,
-  },
-  confirmBtn: {
-    flex: 1,
-    minHeight: tokens.minTouch,
-    backgroundColor: tokens.color.primary,
-    borderRadius: tokens.radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  confirmDestructive: { backgroundColor: tokens.color.criticalFill },
-  confirmText: { color: tokens.color.onPrimary, fontWeight: '700', fontSize: 16 },
-  confirmTextDestructive: { color: tokens.color.onCritical },
-});

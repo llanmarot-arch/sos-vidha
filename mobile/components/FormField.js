@@ -1,6 +1,27 @@
 import React from 'react';
-import { View, Text, TextInput, StyleSheet } from 'react-native';
-import { tokens } from '../theme/tokens';
+import { View, Text, TextInput } from 'react-native';
+import { useThemedStyles } from '../theme/useTheme';
+
+function createStyles(theme) {
+  return {
+    wrap: { marginBottom: theme.spacing.lg },
+    label: { fontSize: 15, fontWeight: '700', color: theme.color.text, marginBottom: 6 },
+    hint: { fontSize: 14, color: theme.color.textSubtle, marginBottom: 6, lineHeight: 20 },
+    input: {
+      minHeight: theme.minTouch,
+      backgroundColor: theme.color.bg2,
+      borderRadius: theme.radius.md,
+      borderWidth: 1.5,
+      borderColor: theme.color.borderStrong,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      color: theme.color.text,
+      fontSize: 16,
+    },
+    inputError: { borderColor: theme.color.critical, borderWidth: 2 },
+    error: { color: theme.color.critical, fontSize: 14, marginTop: 6, lineHeight: 20, fontWeight: '600' },
+  };
+}
 
 export default function FormField({
   label,
@@ -15,6 +36,8 @@ export default function FormField({
   accessibilityLabel,
   hint,
 }) {
+  const { theme, styles } = useThemedStyles(createStyles);
+
   return (
     <View style={styles.wrap}>
       {label ? <Text style={styles.label}>{label}</Text> : null}
@@ -24,7 +47,7 @@ export default function FormField({
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor={tokens.color.textSubtle}
+        placeholderTextColor={theme.color.textSubtle}
         secureTextEntry={secureTextEntry}
         keyboardType={keyboardType}
         autoCapitalize={autoCapitalize}
@@ -41,22 +64,3 @@ export default function FormField({
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  wrap: { marginBottom: tokens.spacing.lg },
-  label: { fontSize: 15, fontWeight: '700', color: tokens.color.text, marginBottom: 6 },
-  hint: { fontSize: 14, color: tokens.color.textSubtle, marginBottom: 6, lineHeight: 20 },
-  input: {
-    minHeight: tokens.minTouch,
-    backgroundColor: tokens.color.bg2,
-    borderRadius: tokens.radius.md,
-    borderWidth: 1.5,
-    borderColor: tokens.color.borderStrong,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: tokens.color.text,
-    fontSize: 16,
-  },
-  inputError: { borderColor: tokens.color.critical, borderWidth: 2 },
-  error: { color: tokens.color.critical, fontSize: 14, marginTop: 6, lineHeight: 20, fontWeight: '600' },
-});

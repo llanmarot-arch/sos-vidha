@@ -1,6 +1,17 @@
 const { sha256, maskPhone, classifyProviderError } = require('./twilioService');
 
 const FINAL_STATUSES = new Set(['delivered', 'undelivered', 'failed']);
+const SETTLED_STATUSES = new Set([
+  'accepted',
+  'sent',
+  'delivered',
+  'undelivered',
+  'failed',
+  'cancelled',
+  'unconfirmed',
+  'dry_run',
+  'rate_limited',
+]);
 const STATUS_RANK = {
   pending: 0,
   sending: 1,
@@ -62,6 +73,7 @@ function createAlertDispatcher({
   liveSend,
   maxAttempts = 3,
   retryBaseMs = 2000,
+  leaseMs = 60000,
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   logger = console,
@@ -134,9 +146,68 @@ function createAlertDispatcher({
   }
 
   /**
-   * Sends one alert per (incident, recipient, channel). Calling this again for the same incident
-   * never re-sends: existing deliveries are returned as-is.
+   * A "sending" row with no provider id may already have been accepted. Adopt a provider match.
+   * Anything else stays unconfirmed and is not sent again.
    */
+  async function reconcileSending(delivery) {
+    if (!provider || typeof provider.findRecentMessage !== 'function') {
+      return update(delivery, { status: 'unconfirmed', providerErrorCode: 'RECONCILE_UNAVAILABLE' });
+    }
+    let lookup = null;
+    try {
+      lookup = await provider.findRecentMessage({
+        channel: delivery.channel,
+        to: delivery.toPhone,
+        bodySha256: delivery.bodySha256,
+        sinceMs: (delivery.lastAttemptAt || delivery.createdAt || now()) - 60000,
+      });
+    } catch {
+      return update(delivery, { status: 'unconfirmed', providerErrorCode: 'RECONCILE_FAILED' });
+    }
+    if (lookup?.match) return update(delivery, providerResultPatch(lookup.match));
+    return update(delivery, {
+      status: 'unconfirmed',
+      providerErrorCode: lookup?.supported ? 'RECONCILE_NO_MATCH' : 'RECONCILE_UNSUPPORTED',
+    });
+  }
+
+  /**
+   * One alert per (incident, recipient, channel). Settled rows are returned unchanged.
+   * pending/retrying with a free lease may be sent once. sending without a provider id is reconciled,
+   * never blindly resent.
+   */
+  async function resumeExisting(delivery, message, { rateLimited = false } = {}) {
+    if (!delivery) return delivery;
+    if (delivery.providerMessageSid || SETTLED_STATUSES.has(delivery.status)) return delivery;
+
+    const leaseHeld = delivery.leaseUntil && delivery.leaseUntil > now();
+    if (delivery.status === 'sending') {
+      if (leaseHeld) return delivery;
+      if (delivery.bodySha256 && message.bodySha256 && delivery.bodySha256 !== message.bodySha256) {
+        return update(delivery, { status: 'unconfirmed', providerErrorCode: 'BODY_MISMATCH' });
+      }
+      return reconcileSending(delivery);
+    }
+
+    if (delivery.status !== 'pending' && delivery.status !== 'retrying') return delivery;
+    if (leaseHeld) return delivery;
+    if (rateLimited) return update(delivery, { status: 'rate_limited' });
+    if (!liveSend || !provider) {
+      logger.info(
+        `[Alerts] DRY RUN: ${message.channel} to ${maskPhone(message.to)} for incident ${delivery.incidentId} not sent (message body not logged)`
+      );
+      return update(delivery, { status: 'dry_run' });
+    }
+
+    const acquired = await repo.acquireLease(delivery.id, leaseMs);
+    if (!acquired.acquired) return acquired.delivery || delivery;
+    let current = acquired.delivery;
+    if (message.bodySha256 && current.bodySha256 !== message.bodySha256) {
+      current = await update(current, { bodySha256: message.bodySha256 });
+    }
+    return sendWithRetry(current, message);
+  }
+
   async function dispatch({ incident, recipients, channel, body = null, twiml = null, statusCallback = null, rateLimited = false }) {
     const payload = channel === 'voice' ? twiml : body;
     const bodySha256 = sha256(payload);
@@ -153,32 +224,21 @@ function createAlertDispatcher({
         toPhone: recipient.phone,
         bodySha256,
       });
-
-      if (!claim.claimed) {
-        results.push(claim.delivery);
-        continue;
-      }
-      onUpdate(claim.delivery);
-
-      if (rateLimited) {
-        results.push(await update(claim.delivery, { status: 'rate_limited' }));
-      } else if (!liveSend || !provider) {
-        logger.info(
-          `[Alerts] DRY RUN: ${channel} to ${maskPhone(recipient.phone)} for incident ${incident.id} not sent (message body not logged)`
-        );
-        results.push(await update(claim.delivery, { status: 'dry_run' }));
-      } else {
-        results.push(
-          await sendWithRetry(claim.delivery, {
+      if (claim.claimed) onUpdate(claim.delivery);
+      results.push(
+        await resumeExisting(
+          claim.delivery,
+          {
             channel,
             to: recipient.phone,
             body,
             twiml,
             statusCallback: channel === 'voice' ? null : statusCallback,
             bodySha256,
-          })
-        );
-      }
+          },
+          { rateLimited }
+        )
+      );
     }
     return results;
   }

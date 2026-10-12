@@ -26,16 +26,17 @@ export async function connectSocket(sessionId, handlers = {}) {
     socket.disconnect();
   }
 
-  const token = await resolveOwnerAuthToken();
-  const auth = token ? { token } : {};
-
   socket = io(SOCKET_URL, {
     transports: ['websocket'],
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
     timeout: 10000,
-    auth,
+    auth: (cb) => {
+      resolveOwnerAuthToken()
+        .then((token) => cb(token ? { token } : {}))
+        .catch(() => cb({}));
+    },
   });
 
   socket.on('connect', () => {

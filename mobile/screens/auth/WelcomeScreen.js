@@ -1,9 +1,9 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Linking } from 'react-native';
+import { View, Text, ScrollView, Linking } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import AppButton from '../../components/AppButton';
 import LogoMark from '../../components/LogoMark';
-import { tokens } from '../../theme/tokens';
+import { useThemedStyles } from '../../theme/useTheme';
 import { isSupabaseConfigured } from '../../lib/supabaseClient';
 
 const BENEFITS = [
@@ -13,6 +13,7 @@ const BENEFITS = [
 ];
 
 export default function WelcomeScreen({ onSignIn, onCreateAccount }) {
+  const { theme, styles } = useThemedStyles(createStyles);
   const configured = isSupabaseConfigured();
 
   return (
@@ -31,7 +32,7 @@ export default function WelcomeScreen({ onSignIn, onCreateAccount }) {
         {BENEFITS.map((b) => (
           <View key={b.icon} style={styles.benefit}>
             <View style={styles.benefitIcon}>
-              <Feather name={b.icon} size={20} color={tokens.color.success} />
+              <Feather name={b.icon} size={20} color={theme.color.success} />
             </View>
             <Text style={styles.benefitText}>{b.text}</Text>
           </View>
@@ -60,7 +61,7 @@ export default function WelcomeScreen({ onSignIn, onCreateAccount }) {
           label="Call 112"
           variant="critical"
           onPress={() => Linking.openURL('tel:112')}
-          icon={<Feather name="phone-call" size={18} color={tokens.color.onCritical} />}
+          icon={<Feather name="phone-call" size={18} color={theme.color.onCritical} />}
           accessibilityLabel="Call 112, emergency services"
           accessibilityHint="Opens your phone dialer. You must confirm the call."
         />
@@ -69,46 +70,48 @@ export default function WelcomeScreen({ onSignIn, onCreateAccount }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: tokens.color.bg0 },
-  content: { padding: tokens.spacing.xl, paddingBottom: 48, gap: tokens.spacing.lg },
-  hero: { alignItems: 'center', marginTop: tokens.spacing.md, gap: tokens.spacing.sm },
-  heroIcon: { marginBottom: tokens.spacing.sm },
-  title: { color: tokens.color.text, fontSize: 26, fontWeight: '700', textAlign: 'center', lineHeight: 32 },
-  subtitle: { color: tokens.color.textMuted, textAlign: 'center', fontSize: 17, lineHeight: 24 },
+function createStyles(theme) {
+  return {
+  root: { flex: 1, backgroundColor: theme.color.bg0 },
+  content: { padding: theme.spacing.xl, paddingBottom: 48, gap: theme.spacing.lg },
+  hero: { alignItems: 'center', marginTop: theme.spacing.md, gap: theme.spacing.sm },
+  heroIcon: { marginBottom: theme.spacing.sm },
+  title: { color: theme.color.text, fontSize: 26, fontWeight: '700', textAlign: 'center', lineHeight: 32 },
+  subtitle: { color: theme.color.textMuted, textAlign: 'center', fontSize: 17, lineHeight: 24 },
   card: {
-    backgroundColor: tokens.color.surface,
-    borderRadius: tokens.radius.lg,
-    padding: tokens.spacing.lg,
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.lg,
     borderWidth: 1,
-    borderColor: tokens.color.border,
-    gap: tokens.spacing.md,
+    borderColor: theme.color.border,
+    gap: theme.spacing.md,
   },
-  benefit: { flexDirection: 'row', alignItems: 'center', gap: tokens.spacing.md },
+  benefit: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.md },
   benefitIcon: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: tokens.color.successSoft,
+    backgroundColor: theme.color.successSoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  benefitText: { flex: 1, color: tokens.color.text, fontSize: 16, lineHeight: 22 },
+  benefitText: { flex: 1, color: theme.color.text, fontSize: 16, lineHeight: 22 },
   notice: {
-    backgroundColor: tokens.color.warningSoft,
-    borderRadius: tokens.radius.md,
-    padding: tokens.spacing.md,
+    backgroundColor: theme.color.warningSoft,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.md,
     borderLeftWidth: 4,
-    borderLeftColor: tokens.color.warning,
+    borderLeftColor: theme.color.warning,
   },
-  noticeText: { color: tokens.color.text, fontSize: 15, lineHeight: 22 },
-  actions: { gap: tokens.spacing.sm },
+  noticeText: { color: theme.color.text, fontSize: 15, lineHeight: 22 },
+  actions: { gap: theme.spacing.sm },
   emergencyBlock: {
-    padding: tokens.spacing.lg,
-    borderRadius: tokens.radius.lg,
-    backgroundColor: tokens.color.criticalSoft,
-    gap: tokens.spacing.sm,
+    padding: theme.spacing.lg,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.color.criticalSoft,
+    gap: theme.spacing.sm,
   },
-  emergencyLabel: { color: tokens.color.critical, fontSize: 18, fontWeight: '700' },
-  emergencyHint: { color: tokens.color.text, fontSize: 15, lineHeight: 22 },
-});
+  emergencyLabel: { color: theme.color.critical, fontSize: 18, fontWeight: '700' },
+  emergencyHint: { color: theme.color.text, fontSize: 15, lineHeight: 22 },
+};
+}

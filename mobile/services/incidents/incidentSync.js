@@ -17,12 +17,16 @@ import {
 export const RETRY_DELAYS_MS = [5000, 15000, 60000, 5 * 60000];
 export const MAX_AUTO_ATTEMPTS = 6;
 
-/** Outcome of a failed request: RETRY later, STOP until the user acts, or RECEIVED (server already has it). */
+/** Outcome of a failed request: RETRY later, STOP until the user acts, or RECORDED_UNCONFIRMED when the row exists but delivery is not proven. */
 export function classifySyncError(err) {
   const status = err?.status;
   if (status == null) return { outcome: 'RETRY', reason: 'NETWORK', ambiguous: true };
   if (status === 409 && err.code === 'INCIDENT_EXISTS' && err.incidentId) {
-    return { outcome: 'RECEIVED', incidentId: err.incidentId };
+    return {
+      outcome: 'RECORDED_UNCONFIRMED',
+      incidentId: err.incidentId,
+      deliveries: Array.isArray(err.deliveries) ? err.deliveries : null,
+    };
   }
   if (status === 401) return { outcome: 'STOP', reason: 'AUTH_REQUIRED' };
   if (status === 422) return { outcome: 'STOP', reason: 'NO_CONTACTS' };
@@ -88,14 +92,17 @@ export function createIncidentSyncer({
     }));
   }
 
-  function markReceived(id, server) {
+  function markReceived(id, server, deliveries = null) {
     return update(id, (r) => ({
       ...r,
       status: SYNC_STATUS.SERVER_RECEIVED,
       statusReason: null,
       server,
-      ledger: markServerEntriesAwaitingStatus(r.ledger),
-      sync: { ...r.sync, nextAttemptAt: null, lastError: null },
+      ledger:
+        Array.isArray(deliveries) && deliveries.length
+          ? mergeServerDeliveries(r.ledger, deliveries)
+          : markServerEntriesAwaitingStatus(r.ledger),
+      sync: { ...r.sync, nextAttemptAt: null, lastError: null, ambiguous: false },
     }));
   }
 
@@ -129,8 +136,25 @@ export function createIncidentSyncer({
       session = await api.syncIncident(buildSyncPayload(syncing, extras));
     } catch (err) {
       const c = classifySyncError(err);
-      if (c.outcome === 'RECEIVED') {
-        return { record: await markReceived(id, { incidentId: c.incidentId, receivedAt: null, deviceActivatedAt: null }), session: null };
+      if (c.outcome === 'RECORDED_UNCONFIRMED') {
+        const deliveries = Array.isArray(c.deliveries) ? c.deliveries : null;
+        const hasEvidence = Boolean(deliveries && deliveries.length);
+        return {
+          record: await update(id, (r) => ({
+            ...r,
+            status: SYNC_STATUS.SERVER_RECEIVED,
+            statusReason: hasEvidence ? null : 'DELIVERY_UNCONFIRMED',
+            server: { incidentId: c.incidentId, receivedAt: null, deviceActivatedAt: null },
+            ledger: hasEvidence ? mergeServerDeliveries(r.ledger, deliveries) : markServerEntriesAwaitingStatus(r.ledger),
+            sync: {
+              ...r.sync,
+              nextAttemptAt: null,
+              ambiguous: !hasEvidence,
+              lastError: hasEvidence ? null : 'DELIVERY_UNCONFIRMED',
+            },
+          })),
+          session: null,
+        };
       }
       if (c.outcome === 'STOP') {
         return { record: await fail(id, c.reason), session: null };
@@ -164,11 +188,15 @@ export function createIncidentSyncer({
       return { record: saved, session: null };
     }
 
-    const saved = await markReceived(id, {
-      incidentId: session.sessionId,
-      receivedAt: Number.isFinite(session.activatedAt) ? session.activatedAt : null,
-      deviceActivatedAt: Number.isFinite(session.deviceActivatedAt) ? session.deviceActivatedAt : null,
-    });
+    const saved = await markReceived(
+      id,
+      {
+        incidentId: session.sessionId,
+        receivedAt: Number.isFinite(session.activatedAt) ? session.activatedAt : null,
+        deviceActivatedAt: Number.isFinite(session.deviceActivatedAt) ? session.deviceActivatedAt : null,
+      },
+      session.deliveries
+    );
     // The session (disarm token, tracking link) is returned in memory only and never written to storage.
     return { record: saved, session };
   }

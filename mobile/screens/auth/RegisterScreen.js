@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import FormField from '../../components/FormField';
 import AppButton from '../../components/AppButton';
-import { authStyles } from './authStyles';
+import { useAuthStyles } from './authStyles';
 import { useAuthStore } from '../../store/useAuthStore';
 
 function validateEmail(email) {
@@ -10,6 +10,7 @@ function validateEmail(email) {
 }
 
 export default function RegisterScreen({ onBack }) {
+  const authStyles = useAuthStyles();
   const signUp = useAuthStore((s) => s.signUp);
   const loading = useAuthStore((s) => s.loading);
   const authError = useAuthStore((s) => s.authError);

@@ -6,7 +6,9 @@ const { Server } = require('socket.io');
 
 const { SessionStore } = require('./sessionStore');
 const { renderTrackingDashboard, mapDisplayStatus } = require('./trackingDashboard');
-const { generatePinSalt, generateDisarmToken, verifyPinHash, secureCompare } = require('./pinAuth');
+const { generateDisarmToken, secureCompare, resolveSessionPins, pinTypeForDisarm } = require('./pinAuth');
+const { createSecretBox } = require('./secretBox');
+const { recoverActiveIncidents } = require('./incidentRecovery');
 const { createAuthMiddleware } = require('./authMiddleware');
 const {
   userOwnsSession,
@@ -44,6 +46,15 @@ function parseDeviceActivatedAt(value, serverNowMs) {
 
 const ownerRoom = (id) => `owner:${id}`;
 const trackerRoom = (id) => `tracker:${id}`;
+
+function buildCorsOrigin(config) {
+  const allowed = Array.isArray(config.corsOrigins) ? config.corsOrigins : [];
+  if (!config.isProduction && allowed.length === 0) return '*';
+  return function origin(requestOrigin, callback) {
+    if (!requestOrigin || allowed.includes(requestOrigin)) callback(null, true);
+    else callback(null, false);
+  };
+}
 
 function noStore(req, res, next) {
   res.set('Cache-Control', 'no-store');
@@ -90,8 +101,10 @@ function createSosServer({
     app.set('trust proxy', /^\d+$/.test(tp) ? Number(tp) : tp === 'true' ? true : tp);
   }
   const server = http.createServer(app);
+  const corsOrigin = buildCorsOrigin(config);
+  const secretBox = config.dataEncryptionKey ? createSecretBox(config.dataEncryptionKey) : null;
   const io = new Server(server, {
-    cors: { origin: '*', methods: ['GET', 'POST'] },
+    cors: { origin: corsOrigin, methods: ['GET', 'POST'] },
     pingInterval: 10000,
     pingTimeout: 5000,
   });
@@ -117,6 +130,7 @@ function createSosServer({
     liveSend: config.alertsLiveSend,
     maxAttempts: config.smsMaxAttempts,
     retryBaseMs: config.smsRetryBaseMs,
+    leaseMs: config.dispatchLeaseMs,
     now,
     sleep,
     logger,
@@ -346,7 +360,7 @@ function createSosServer({
     now,
   });
 
-  app.use(cors());
+  app.use(cors({ origin: corsOrigin }));
   app.use(express.json({ limit: '100kb' }));
   app.use(attachAuthUser);
 
@@ -355,18 +369,74 @@ function createSosServer({
   });
 
   app.get('/health', (_req, res) => {
-    res.json({
-      ok: true,
-      activeSessions: sessionStore.sessions.size,
-      publicServerUrl,
-      uptime: process.uptime(),
-      authRequired: config.supabaseConfigured,
-      secureTracking: secureMode,
-      alertsMode: config.alertsLiveSend ? 'live' : 'dry_run',
-    });
+    res.json({ ok: true });
   });
 
-  app.post('/api/session/start', startIpLimiter, requireAuthWhenConfigured, startUserLimiter, async (req, res) => {
+  function limitSessionStart(req, res, next) {
+    // Authenticated SOS is limited per account. An IP bucket is only used for local
+    // development, where there is no account, so anonymous traffic cannot exhaust it.
+    if (secureMode) return startUserLimiter(req, res, next);
+    return startIpLimiter(req, res, () => startUserLimiter(req, res, next));
+  }
+
+  function restorePersistedSession(incident) {
+    if (!incident || incident.status === 'DISARMED' || incident.endedAt || incident.trackerRevokedAt) return null;
+    if (incident.trackerExpiresAt != null && incident.trackerExpiresAt <= now()) return null;
+    const existing = sessionStore.get(incident.id);
+    if (existing) return existing.status === 'DISARMED' ? null : existing;
+    if (!secretBox || !incident.runtimeEnc) return null;
+    let runtime;
+    try {
+      runtime = JSON.parse(secretBox.decrypt(incident.runtimeEnc));
+    } catch {
+      logger.error(`[Recovery] Could not read incident ${incident.id}`);
+      return null;
+    }
+    if (!runtime?.trackerToken || !runtime.disarmToken) return null;
+    if (incident.trackerTokenSha256 && sha256(runtime.trackerToken) !== incident.trackerTokenSha256) {
+      logger.error(`[Recovery] Tracker capability did not match incident ${incident.id}`);
+      return null;
+    }
+    return sessionStore.restore({
+      sessionId: incident.id,
+      userId: incident.userId,
+      mode: incident.mode || 'GEOFENCE',
+      status: incident.status,
+      initialLocation: incident.location || null,
+      locationUnavailableReason: incident.locationUnavailableReason,
+      pinSalt: runtime.pinSalt,
+      standardPinHash: runtime.standardPinHash,
+      duressPinHash: runtime.duressPinHash,
+      disarmToken: runtime.disarmToken,
+      trackerToken: runtime.trackerToken,
+      trackerExpiresAt: incident.trackerExpiresAt,
+      profileName: runtime.profileName || null,
+      safeZone: incident.safeZone || null,
+      recipients: Array.isArray(runtime.recipients) ? runtime.recipients : [],
+      deviceActivatedAt: incident.deviceActivatedAt || runtime.deviceActivatedAt || null,
+      emergencyTriggeredAt: incident.emergencyAt,
+      createdAt: incident.createdAt || incident.activatedAt,
+    });
+  }
+
+  async function quarantineDeliveries(incidentId) {
+    let rows = [];
+    try {
+      rows = await incidents.listDeliveries(incidentId);
+    } catch (err) {
+      logger.error(`[Recovery] Could not list deliveries for ${incidentId}`);
+      return 0;
+    }
+    let changed = 0;
+    for (const row of rows) {
+      if (!['pending', 'sending', 'retrying'].includes(row.status) || row.providerMessageSid) continue;
+      await incidents.updateDelivery(row.id, { status: 'unconfirmed', providerErrorCode: 'RECOVERY_UNAVAILABLE' });
+      changed += 1;
+    }
+    return changed;
+  }
+
+  app.post('/api/session/start', requireAuthWhenConfigured, limitSessionStart, async (req, res) => {
     const body = req.body || {};
     const userId = req.user?.id || null;
     const mode = body.mode || 'GEOFENCE';
@@ -374,8 +444,12 @@ function createSosServer({
     if (!['GEOFENCE', 'TRANSIT'].includes(mode)) {
       return res.status(400).json({ error: 'mode must be GEOFENCE or TRANSIT' });
     }
-    if (!body.standardPinHash || !body.duressPinHash) {
-      return res.status(400).json({ error: 'standardPinHash and duressPinHash are required' });
+    const pins = resolveSessionPins(body);
+    delete body.standardPin;
+    delete body.duressPin;
+    delete body.pin;
+    if (pins.error) {
+      return res.status(400).json({ error: pins.error });
     }
     if (mode === 'TRANSIT') {
       if (body.destination?.latitude == null || body.destination?.longitude == null) {
@@ -449,6 +523,20 @@ function createSosServer({
     const trackerToken = generateDisarmToken();
     const disarmToken = generateDisarmToken();
     const trackerExpiresAt = activatedAt + config.trackerTtlMs;
+    const runtimeEnc = secretBox
+      ? secretBox.encrypt(
+          JSON.stringify({
+            trackerToken,
+            disarmToken,
+            pinSalt: pins.pinSalt,
+            standardPinHash: pins.standardPinHash,
+            duressPinHash: pins.duressPinHash,
+            recipients,
+            profileName: profile?.fullName || null,
+            deviceActivatedAt,
+          })
+        )
+      : null;
 
     let created;
     try {
@@ -468,6 +556,7 @@ function createSosServer({
         distanceFromSafeZoneM: zone.distanceM,
         trackerTokenSha256: sha256(trackerToken),
         trackerExpiresAt,
+        runtimeEnc,
       });
     } catch (err) {
       logger.error(`[Incident] Persist failed: ${err.message}`);
@@ -478,14 +567,33 @@ function createSosServer({
     }
 
     if (!created.created) {
-      const existing = sessionStore.get(created.incident.id);
-      if (existing && existing.userId === userId) {
-        return res.status(200).json(sessionResponse(existing, { reused: true }));
+      const existing = restorePersistedSession(created.incident);
+      if (existing && existing.userId === userId && existing.status !== 'DISARMED') {
+        let prior = null;
+        try {
+          prior = await incidents.listDeliveries(existing.sessionId);
+        } catch {
+          prior = null;
+        }
+        return res.status(200).json(
+          sessionResponse(existing, {
+            reused: true,
+            deliveries: prior ? prior.map(publicDelivery) : null,
+          })
+        );
+      }
+      let priorDeliveries = null;
+      try {
+        priorDeliveries = await incidents.listDeliveries(created.incident.id);
+      } catch {
+        priorDeliveries = null;
       }
       return res.status(409).json({
-        error: 'This SOS was already recorded, but its live session is no longer active. Start a new SOS if you still need help.',
+        error:
+          'This SOS was already recorded, but its live session is no longer active. Start a new SOS if you still need help.',
         code: 'INCIDENT_EXISTS',
         incidentId: created.incident.id,
+        deliveries: priorDeliveries ? priorDeliveries.map(publicDelivery) : null,
       });
     }
 
@@ -498,9 +606,9 @@ function createSosServer({
       routes: body.routes,
       initialLocation,
       locationUnavailableReason,
-      pinSalt: body.pinSalt || generatePinSalt(),
-      standardPinHash: body.standardPinHash,
-      duressPinHash: body.duressPinHash,
+      pinSalt: pins.pinSalt,
+      standardPinHash: pins.standardPinHash,
+      duressPinHash: pins.duressPinHash,
       disarmToken,
       trackerToken,
       trackerExpiresAt,
@@ -584,6 +692,8 @@ function createSosServer({
   });
 
   app.get('/track/:sessionId', noStore, (req, res) => {
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
     const session = sessionStore.get(req.params.sessionId);
     if (!session) {
       return res.status(404).send('<h1 style="font-family:sans-serif;color:#EF4444">Session not found</h1>');
@@ -665,8 +775,21 @@ function createSosServer({
     return res.status(204).end();
   });
 
-  app.post('/api/session/disarm', requireAuthWhenConfigured, async (req, res) => {
-    const { sessionId, pinHash, disarmToken, method } = req.body || {};
+  const disarmLimiter = createRateLimiter({
+    windowMs: config.disarmWindowMs,
+    max: config.disarmMaxAttempts,
+    keyFn: (req) => {
+      const sessionId = req.body?.sessionId;
+      if (!sessionId) return null;
+      return `${req.user?.id || req.ip || 'anon'}:${sessionId}`;
+    },
+    message: 'Too many disarm attempts. The SOS stays active. Wait and try again, or call emergency services.',
+    now,
+  });
+
+  app.post('/api/session/disarm', requireAuthWhenConfigured, disarmLimiter, async (req, res) => {
+    const { sessionId, pinHash, pin, disarmToken, method } = req.body || {};
+    if (req.body) delete req.body.pin;
 
     if (!sessionId) {
       return res.status(400).json({ error: 'sessionId is required' });
@@ -685,13 +808,19 @@ function createSosServer({
         return res.status(401).json({ error: 'Invalid disarm token', success: false });
       }
       pinType = 'STANDARD';
-    } else if (pinHash) {
-      pinType = verifyPinHash(pinHash, session.standardPinHash, session.duressPinHash);
+    } else if (pin || pinHash) {
+      pinType = pinTypeForDisarm({
+        pin,
+        pinHash,
+        pinSalt: session.pinSalt,
+        standardPinHash: session.standardPinHash,
+        duressPinHash: session.duressPinHash,
+      });
       if (!pinType) {
         return res.status(401).json({ error: 'Invalid PIN', success: false });
       }
     } else {
-      return res.status(400).json({ error: 'pinHash or biometric disarmToken required', success: false });
+      return res.status(400).json({ error: 'PIN or biometric disarmToken required', success: false });
     }
 
     if (pinType === 'DURESS') {
@@ -809,7 +938,18 @@ function createSosServer({
       }
       sessionStore.updateLocation(session.sessionId, check.location);
       if (payload.clientStatus) sessionStore.updateClientStatus(session.sessionId, payload.clientStatus);
-      broadcastSessionUpdate(sessionStore.get(session.sessionId));
+      const published = sessionStore.get(session.sessionId);
+      const assessment = assess(published, published.emergencyTriggeredAt || now());
+      incidents
+        .updateIncidentLocation(session.sessionId, {
+          location: check.location,
+          locationStatus: assessment.status,
+          locationUnavailableReason: assessment.status === 'UNAVAILABLE' ? assessment.reason : null,
+        })
+        .catch(() => {
+          logger.error(`[Incident] Location persist failed for ${session.sessionId}`);
+        });
+      broadcastSessionUpdate(published);
     };
     socket.on('location-stream', handleLocationStream);
     socket.on('LOCATION_UPDATE', handleLocationStream);
@@ -895,6 +1035,16 @@ function createSosServer({
     }
   }
 
+  function recover() {
+    return recoverActiveIncidents({
+      incidents,
+      now,
+      restoreSession: (incident) => restorePersistedSession(incident),
+      dispatchSession: (sessionId) => runAlertDispatch(sessionId),
+      quarantineDeliveries,
+    });
+  }
+
   return {
     app,
     server,
@@ -905,6 +1055,7 @@ function createSosServer({
     waitForIdle,
     runMaintenance,
     checkHeartbeats,
+    recover,
   };
 }
 

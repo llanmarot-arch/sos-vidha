@@ -1,3 +1,7 @@
+/**
+ * Legacy fast hash kept for older callers. New SOS sessions send the PIN to the server,
+ * which stores a slow scrypt hash. Do not use this result as proof of a stored PIN.
+ */
 import * as Crypto from 'expo-crypto';
 
 const PIN_ITERATIONS = 120000;

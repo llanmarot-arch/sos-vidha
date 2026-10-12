@@ -13,54 +13,29 @@ class SimpleEmitter {
   }
 }
 
-class SimulatedSensor extends SimpleEmitter {
-  constructor(name) {
-    super();
-    this.name = name;
-    this.interval = null;
-    this.updateInterval = 500;
-  }
+class UnavailableSensor extends SimpleEmitter {
+  setUpdateInterval() {}
 
   async isAvailableAsync() {
-    return true;
+    return false;
   }
 
-  setUpdateInterval(ms) {
-    this.updateInterval = ms;
-  }
+  async start() {}
 
-  async start() {
-    if (this.interval) return;
-    this.interval = setInterval(() => {
-      const t = Date.now() / 1000;
-      const payload =
-        this.name === 'accelerometer'
-          ? {
-              x: Math.sin(t) * 0.2,
-              y: Math.cos(t) * 0.15,
-              z: 9.8 + Math.sin(t * 2) * 0.05,
-              timestamp: Date.now(),
-            }
-          : { x: 0.01, y: 0.02, z: Math.sin(t) * 0.4, timestamp: Date.now() };
-      this.emit('update', payload);
-    }, this.updateInterval);
-  }
+  stop() {}
 
-  stop() {
-    if (this.interval) {
-      clearInterval(this.interval);
-      this.interval = null;
-    }
+  addListener() {
+    return { remove() {} };
   }
 }
 
-export const Accelerometer = new SimulatedSensor('accelerometer');
-export const Gyroscope = new SimulatedSensor('gyroscope');
+export const Accelerometer = new UnavailableSensor();
+export const Gyroscope = new UnavailableSensor();
 
 export async function isAccelerometerAvailableAsync() {
-  return true;
+  return false;
 }
 
 export async function isGyroscopeAvailableAsync() {
-  return true;
+  return false;
 }

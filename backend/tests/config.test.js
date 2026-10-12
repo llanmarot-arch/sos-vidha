@@ -12,6 +12,8 @@ const FULL_PROD = {
   TWILIO_ACCOUNT_SID: 'AC123',
   TWILIO_AUTH_TOKEN: 'tok',
   TWILIO_PHONE_NUMBER: '+15550000000',
+  DATA_ENCRYPTION_KEY: 'ab'.repeat(32),
+  CORS_ORIGINS: 'https://sos.example.org',
 };
 
 describe('startup configuration', () => {
@@ -42,6 +44,36 @@ describe('startup configuration', () => {
   it('keeps development in dry-run unless explicitly enabled', () => {
     assert.equal(loadConfig({ ...FULL_PROD, NODE_ENV: 'development' }).alertsLiveSend, false);
     assert.equal(loadConfig({ ...FULL_PROD, NODE_ENV: 'development', SMS_LIVE_SEND: 'true' }).alertsLiveSend, true);
+  });
+
+  it('allows local development without accounts', () => {
+    const config = loadConfig({ NODE_ENV: 'development' });
+    assert.equal(config.secureMode, false);
+    assert.deepEqual(validateStartupConfig(config).errors, []);
+    assert.match(validateStartupConfig(config).warnings.join(' '), /DATA_ENCRYPTION_KEY/);
+  });
+
+  it('fails in production without an encryption key', () => {
+    const env = { ...FULL_PROD, DATA_ENCRYPTION_KEY: '' };
+    assert.match(validateStartupConfig(loadConfig(env)).errors.join(' '), /DATA_ENCRYPTION_KEY/);
+  });
+
+  it('rejects a partial encryption key', () => {
+    const env = { NODE_ENV: 'development', DATA_ENCRYPTION_KEY: 'abcd' };
+    assert.match(validateStartupConfig(loadConfig(env)).errors.join(' '), /64 hex/);
+  });
+
+  it('warns when production has no browser origins', () => {
+    const env = { ...FULL_PROD, CORS_ORIGINS: '' };
+    const result = validateStartupConfig(loadConfig(env));
+    assert.deepEqual(result.errors, []);
+    assert.match(result.warnings.join(' '), /CORS_ORIGINS/);
+  });
+
+  it('refuses to start when Supabase is only partly configured', () => {
+    const config = loadConfig({ NODE_ENV: 'development', SUPABASE_URL: 'https://x.supabase.co' });
+    assert.equal(config.supabaseConfigured, false);
+    assert.match(validateStartupConfig(config).errors.join(' '), /partial authentication/);
   });
 
   it('server.js exits non-zero in production when auth configuration is missing', () => {

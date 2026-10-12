@@ -55,18 +55,12 @@ function authorizeOwnerSocket(session, user, secureMode = isSecureTrackingEnable
   return { allowed: true, role: 'owner' };
 }
 
-function authorizeTrackerSocket(session, trackerToken, secureMode = isSecureTrackingEnabled(), nowMs = Date.now()) {
+function authorizeTrackerSocket(session, trackerToken, _secureMode = isSecureTrackingEnabled(), nowMs = Date.now()) {
   if (!session) {
     return { allowed: false, reason: 'INVALID_SESSION' };
   }
-  if (secureMode) {
-    if (!isTrackerCapabilityValid(session, trackerToken, nowMs)) {
-      return { allowed: false, reason: 'INVALID_TRACKER_CAPABILITY' };
-    }
-    return { allowed: true, role: 'tracker' };
-  }
-  if (session.status === 'DISARMED') {
-    return { allowed: false, reason: 'SESSION_ENDED' };
+  if (!isTrackerCapabilityValid(session, trackerToken, nowMs)) {
+    return { allowed: false, reason: 'INVALID_TRACKER_CAPABILITY' };
   }
   return { allowed: true, role: 'tracker' };
 }
@@ -83,9 +77,6 @@ function authorizeSessionRead(
   }
   if (isTrackerCapabilityValid(session, trackerToken, nowMs)) {
     return { allowed: true, mode: 'tracker' };
-  }
-  if (!secureMode && !user?.id && !trackerToken) {
-    return { allowed: true, mode: 'legacy_dev' };
   }
   return { allowed: false, reason: 'FORBIDDEN' };
 }

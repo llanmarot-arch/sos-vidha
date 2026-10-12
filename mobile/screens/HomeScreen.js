@@ -18,7 +18,6 @@ import MapView, { Circle, Marker, Polyline, PROVIDER_DEFAULT } from 'react-nativ
 import Slider from '@react-native-community/slider';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import DisarmModal from '../components/DisarmModal';
-import { API_BASE_URL } from '../constants/config';
 import {
   GEOFENCE_RADIUS_MIN_M,
   GEOFENCE_RADIUS_MAX_M,
@@ -35,37 +34,21 @@ import {
 } from '../services/locationTracker';
 import { connectSocket, disconnectSocket, emitTriggerEmergency } from '../services/socketService';
 import { fetchTransitRoutes, geocodeDestination } from '../services/routeService';
-import { buildSessionPinPayload } from '../utils/pinCrypto';
 import { SYSTEM_STATES, useSafetyStore } from '../store/useSafetyStore';
 import { useSOSDispatch } from '../hooks/useSOSDispatch';
 import { useSOSFlowStore } from '../store/useSOSFlowStore';
 import { useContactsStore } from '../store/useContactsStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { SOS_STATES } from '../theme/tokens';
+import { useThemedStyles } from '../theme/useTheme';
+import { useI18n } from '../i18n/useI18n';
+import { useSettingsStore } from '../store/useSettingsStore';
+import { LOCALES } from '../i18n/translate';
+import ChoiceSetting from '../components/ChoiceSetting';
 import AlertStatusPanel from '../components/AlertStatusPanel';
 import IncidentStatusPanel from '../components/IncidentStatusPanel';
 
 const { height: SCREEN_H } = Dimensions.get('window');
-
-const COLORS = {
-  bg: '#0F172A',
-  slate: '#1E293B',
-  border: '#334155',
-  text: '#F8FAFC',
-  muted: '#94A3B8',
-  emerald: '#10B981',
-  amber: '#F59E0B',
-  crimson: '#EF4444',
-};
-
-const STATUS_META = {
-  IDLE: { label: 'STANDBY', color: COLORS.muted },
-  MONITORING: { label: 'MONITORING', color: COLORS.emerald },
-  WARNING: { label: 'WARNING', color: COLORS.amber },
-  EMERGENCY: { label: 'EMERGENCY', color: COLORS.crimson },
-  DURESS_ACTIVE: { label: 'EMERGENCY', color: COLORS.crimson },
-  DISARMED: { label: 'DISARMED', color: COLORS.muted },
-};
 
 const DARK_MAP_STYLE = [
   { elementType: 'geometry', stylers: [{ color: '#1d2c4d' }] },
@@ -77,7 +60,21 @@ const DARK_MAP_STYLE = [
   { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#283d6a' }] },
 ];
 
+function statusMetaFor(theme, systemState, t) {
+  const map = {
+    IDLE: { label: t('native.standby'), color: theme.color.textSubtle },
+    MONITORING: { label: t('native.monitoring'), color: theme.color.success },
+    WARNING: { label: t('native.warning'), color: theme.color.warning },
+    EMERGENCY: { label: t('native.emergency'), color: theme.color.critical },
+    DURESS_ACTIVE: { label: t('native.emergency'), color: theme.color.critical },
+    DISARMED: { label: t('native.disarmed'), color: theme.color.textSubtle },
+  };
+  return map[systemState] || map.IDLE;
+}
+
 function HoldSOSButton({ onActivate, disabled }) {
+  const { styles: sosStyles } = useThemedStyles(createHoldStyles);
+  const { t } = useI18n();
   const progress = useRef(new Animated.Value(0)).current;
   const holdTimer = useRef(null);
   const HOLD_MS = 1500;
@@ -106,18 +103,18 @@ function HoldSOSButton({ onActivate, disabled }) {
       style={[sosStyles.btn, disabled && sosStyles.btnDisabled]}
     >
       <Animated.View style={[sosStyles.fill, { width }]} />
-      <Text style={sosStyles.label}>HOLD 1.5s · INSTANT SOS</Text>
+      <Text style={sosStyles.label}>{t('native.holdButton')}</Text>
     </Pressable>
   );
 }
 
-const sosStyles = StyleSheet.create({
+const createHoldStyles = (theme) => ({
   btn: {
     height: 58,
     borderRadius: 18,
-    backgroundColor: '#7F1D1D',
+    backgroundColor: theme.color.criticalFill,
     borderWidth: 2,
-    borderColor: COLORS.crimson,
+    borderColor: theme.color.critical,
     overflow: 'hidden',
     justifyContent: 'center',
     alignItems: 'center',
@@ -129,11 +126,11 @@ const sosStyles = StyleSheet.create({
     left: 0,
     top: 0,
     bottom: 0,
-    backgroundColor: COLORS.crimson,
-    opacity: 0.55,
+    backgroundColor: theme.color.onCritical,
+    opacity: 0.28,
   },
   label: {
-    color: '#FFF',
+    color: theme.color.onCritical,
     fontWeight: '900',
     letterSpacing: 1.2,
     fontSize: 14,
@@ -141,6 +138,12 @@ const sosStyles = StyleSheet.create({
 });
 
 export default function HomeScreen() {
+  const { theme, styles } = useThemedStyles(createHomeStyles);
+  const { t } = useI18n();
+  const scheme = useSettingsStore((s) => s.scheme);
+  const locale = useSettingsStore((s) => s.locale);
+  const setAppearance = useSettingsStore((s) => s.setAppearance);
+  const setLocale = useSettingsStore((s) => s.setLocale);
   const insets = useSafeAreaInsets();
   const store = useSafetyStore();
   const mapRef = useRef(null);
@@ -196,13 +199,11 @@ export default function HomeScreen() {
     };
   }, []);
 
-  const statusMeta = STATUS_META[store.systemState] || STATUS_META.IDLE;
+  const statusMeta = statusMetaFor(theme, store.systemState, t);
 
   const region = useMemo(() => {
     const loc = store.currentLocation || store.geofenceCenter;
-    if (!loc) {
-      return { latitude: 28.6139, longitude: 77.209, latitudeDelta: 0.04, longitudeDelta: 0.04 };
-    }
+    if (!loc || !Number.isFinite(loc.latitude) || !Number.isFinite(loc.longitude)) return null;
     return { latitude: loc.latitude, longitude: loc.longitude, latitudeDelta: 0.04, longitudeDelta: 0.04 };
   }, [store.currentLocation, store.geofenceCenter]);
 
@@ -233,28 +234,14 @@ export default function HomeScreen() {
   };
 
   const startSessionOnServer = async (payload, standardPin, duressPin) => {
-    const pinPayload = await buildSessionPinPayload(standardPin, duressPin);
-
-    const response = await fetch(`${API_BASE_URL}/api/session/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...payload,
-        userPhone: store.userPhone,
-        contact1: store.contact1,
-        contact2: store.contact2,
-        pinSalt: pinPayload.pinSalt,
-        standardPinHash: pinPayload.standardPinHash,
-        duressPinHash: pinPayload.duressPinHash,
-      }),
+    return apiClient.startSession({
+      ...payload,
+      userPhone: store.userPhone,
+      contact1: store.contact1,
+      contact2: store.contact2,
+      standardPin,
+      duressPin,
     });
-
-    if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.error || 'Failed to start session');
-    }
-
-    return response.json();
   };
 
   const bindSession = async (session, mode, trackingConfig) => {
@@ -404,19 +391,20 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.root}>
+      {region ? (
       <MapView
         ref={mapRef}
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_DEFAULT}
-        customMapStyle={DARK_MAP_STYLE}
+        customMapStyle={theme.scheme === 'light' ? undefined : DARK_MAP_STYLE}
         region={region}
         showsUserLocation
         showsMyLocationButton={false}
-        userInterfaceStyle="dark"
+        userInterfaceStyle={theme.scheme === 'light' ? 'light' : 'dark'}
       >
         {store.geofenceCenter && store.mode === 'GEOFENCE' ? (
           <>
-            <Marker coordinate={store.geofenceCenter} pinColor={COLORS.emerald} />
+            <Marker coordinate={store.geofenceCenter} pinColor={theme.color.success} />
             <Circle
               center={store.geofenceCenter}
               radius={store.geofenceRadiusM}
@@ -441,6 +429,11 @@ export default function HomeScreen() {
           ) : null
         )}
       </MapView>
+      ) : (
+        <View style={[StyleSheet.absoluteFill, styles.mapWaiting]} pointerEvents="none">
+          <Text style={styles.mapWaitingText}>{t('native.waitingGps')}</Text>
+        </View>
+      )}
 
       <SafeAreaView style={styles.topHud} edges={['top']} pointerEvents="box-none">
         <View style={styles.brandRow}>
@@ -453,7 +446,7 @@ export default function HomeScreen() {
 
         {store.countdownSeconds != null ? (
           <View style={styles.countdownChip}>
-            <Text style={styles.countdownText}>{store.countdownSeconds}s to respond</Text>
+            <Text style={styles.countdownText}>{t('native.respond', { seconds: store.countdownSeconds })}</Text>
           </View>
         ) : null}
 
@@ -466,15 +459,14 @@ export default function HomeScreen() {
         {serverReachable === false ? (
           <View style={styles.warningChip}>
             <Text style={styles.warningText}>
-              OFFLINE MAP UNAVAILABLE · No connection. SOS-Vidha has no offline map; any map shown is your phone's own
-              cache and may be incomplete. Live tracking is not updating.
+              {t('native.offlineMap')}
             </Text>
           </View>
         ) : null}
 
         {!store.currentLocation ? (
           <View style={styles.infoChip}>
-            <Text style={styles.infoChipText}>No GPS fix yet. The map is not centred on your position.</Text>
+            <Text style={styles.infoChipText}>{t('native.noGps')}</Text>
           </View>
         ) : null}
       </SafeAreaView>
@@ -492,34 +484,52 @@ export default function HomeScreen() {
               onPress={() => setActiveTab(tab)}
             >
               <Text style={[styles.tabLabel, activeTab === tab && styles.tabLabelActive]}>
-                {tab === 'GEOFENCE' ? 'Safe Zone' : 'Transit Safeguard'}
+                {tab === 'GEOFENCE' ? t('native.safeZone') : t('native.transit')}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
 
         <ScrollView style={styles.drawerScroll} showsVerticalScrollIndicator={false}>
-          <Text style={styles.sectionLabel}>Emergency Profile</Text>
+          <Text style={styles.sectionLabel}>{t('settings.appearance')}</Text>
+          <ChoiceSetting
+            label={t('settings.colourMode')}
+            description={t('settings.colourModeDesc')}
+            value={scheme}
+            onChange={(next) => setAppearance({ scheme: next })}
+            options={[
+              { id: 'dark', label: t('settings.dark') },
+              { id: 'light', label: t('settings.light') },
+            ]}
+          />
+          <ChoiceSetting
+            label={t('settings.language')}
+            description={t('settings.languageDesc')}
+            value={locale}
+            onChange={setLocale}
+            options={LOCALES.map((item) => ({ id: item.id, label: item.nativeLabel }))}
+          />
+          <Text style={styles.sectionLabel}>{t('native.profile')}</Text>
           <TextInput
             style={styles.input}
-            placeholder="Your phone (+91...)"
-            placeholderTextColor="#64748B"
+            placeholder={t('native.phonePlaceholder')}
+            placeholderTextColor={theme.color.textSubtle}
             value={store.userPhone}
             onChangeText={(v) => store.setContacts(v, store.contact1, store.contact2)}
             keyboardType="phone-pad"
           />
           <TextInput
             style={styles.input}
-            placeholder="Guardian 1"
-            placeholderTextColor="#64748B"
+            placeholder={t('native.guardian1')}
+            placeholderTextColor={theme.color.textSubtle}
             value={store.contact1}
             onChangeText={(v) => store.setContacts(store.userPhone, v, store.contact2)}
             keyboardType="phone-pad"
           />
           <TextInput
             style={styles.input}
-            placeholder="Guardian 2"
-            placeholderTextColor="#64748B"
+            placeholder={t('native.guardian2')}
+            placeholderTextColor={theme.color.textSubtle}
             value={store.contact2}
             onChangeText={(v) => store.setContacts(store.userPhone, store.contact1, v)}
             keyboardType="phone-pad"
@@ -528,8 +538,8 @@ export default function HomeScreen() {
           <View style={styles.pinRow}>
             <TextInput
               style={[styles.input, styles.pinField]}
-              placeholder="Regular PIN"
-              placeholderTextColor="#64748B"
+              placeholder={t('native.regularPin')}
+              placeholderTextColor={theme.color.textSubtle}
               value={store.regularPin}
               onChangeText={(v) => store.setRegularPin(v.replace(/\D/g, '').slice(0, 4))}
               keyboardType="number-pad"
@@ -538,8 +548,8 @@ export default function HomeScreen() {
             />
             <TextInput
               style={[styles.input, styles.pinField]}
-              placeholder="Duress PIN (session)"
-              placeholderTextColor="#64748B"
+              placeholder={t('native.duressPin')}
+              placeholderTextColor={theme.color.textSubtle}
               value={duressPinInput}
               onChangeText={(v) => setDuressPinInput(v.replace(/\D/g, '').slice(0, 4))}
               keyboardType="number-pad"
@@ -550,7 +560,7 @@ export default function HomeScreen() {
 
           {activeTab === 'GEOFENCE' ? (
             <>
-              <Text style={styles.sectionLabel}>Safe Zone · {store.geofenceRadiusM}m radius</Text>
+              <Text style={styles.sectionLabel}>{t('native.radius', { meters: store.geofenceRadiusM })}</Text>
               <Slider
                 style={styles.slider}
                 minimumValue={GEOFENCE_RADIUS_MIN_M}
@@ -560,9 +570,9 @@ export default function HomeScreen() {
                 onValueChange={(v) =>
                   store.setGeofence(store.geofenceCenter, Math.round(v), store.geofenceTimerMinutes)
                 }
-                minimumTrackTintColor={COLORS.emerald}
-                maximumTrackTintColor={COLORS.border}
-                thumbTintColor={COLORS.emerald}
+                minimumTrackTintColor={theme.color.success}
+                maximumTrackTintColor={theme.color.border}
+                thumbTintColor={theme.color.success}
               />
               <View style={styles.timerRow}>
                 {[15, 30, 60, 120].map((mins) => (
@@ -583,19 +593,19 @@ export default function HomeScreen() {
                 disabled={loading || isMonitoring}
               >
                 {loading ? (
-                  <ActivityIndicator color="#0F172A" />
+                  <ActivityIndicator color={theme.color.onSuccess} />
                 ) : (
-                  <Text style={styles.actionBtnText}>Activate Safe Zone</Text>
+                  <Text style={styles.actionBtnText}>{t('native.activateZone')}</Text>
                 )}
               </TouchableOpacity>
             </>
           ) : (
             <>
-              <Text style={styles.sectionLabel}>Transit Safeguard</Text>
+              <Text style={styles.sectionLabel}>{t('native.transitTitle')}</Text>
               <TextInput
                 style={styles.input}
-                placeholder="Search destination..."
-                placeholderTextColor="#64748B"
+                placeholder={t('native.destinationPlaceholder')}
+                placeholderTextColor={theme.color.textSubtle}
                 value={destinationQuery}
                 onChangeText={setDestinationQuery}
               />
@@ -605,9 +615,9 @@ export default function HomeScreen() {
                 disabled={loading || isMonitoring}
               >
                 {loading ? (
-                  <ActivityIndicator color="#0F172A" />
+                  <ActivityIndicator color={theme.color.onSuccess} />
                 ) : (
-                  <Text style={styles.actionBtnText}>Start Route Monitor</Text>
+                  <Text style={styles.actionBtnText}>{t('native.startRoute')}</Text>
                 )}
               </TouchableOpacity>
             </>
@@ -615,7 +625,7 @@ export default function HomeScreen() {
 
           {isMonitoring ? (
             <TouchableOpacity style={styles.secondaryBtn} onPress={() => setShowDisarmModal(true)}>
-              <Text style={styles.secondaryBtnText}>Disarm / End Session</Text>
+              <Text style={styles.secondaryBtnText}>{t('native.disarm')}</Text>
             </TouchableOpacity>
           ) : null}
 
@@ -624,7 +634,7 @@ export default function HomeScreen() {
             disabled={!store.sessionId && sosState !== SOS_STATES.IDLE}
           />
           {sosState === SOS_STATES.DISPATCHING ? (
-            <Text style={styles.dispatchingText}>Saving SOS on this phone and sending…</Text>
+            <Text style={styles.dispatchingText}>{t('native.savingSos')}</Text>
           ) : null}
 
           {sosState === SOS_STATES.ACTIVE_ALERT ? (
@@ -637,14 +647,13 @@ export default function HomeScreen() {
                 alertStatusError={flow.alertStatusError}
               />
               <TouchableOpacity style={styles.secondaryBtn} onPress={cancelAlert}>
-                <Text style={styles.secondaryBtnText}>Stop SOS alert</Text>
+                <Text style={styles.secondaryBtnText}>{t('native.stopSos')}</Text>
               </TouchableOpacity>
             </View>
           ) : null}
           {flow.dispatchError ? <Text style={styles.dispatchError}>{flow.dispatchError}</Text> : null}
 
           <IncidentStatusPanel
-            dark
             hideIncidentId={sosState === SOS_STATES.ACTIVE_ALERT ? flow.localIncidentId : null}
           />
         </ScrollView>
@@ -662,8 +671,16 @@ export default function HomeScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: COLORS.bg },
+function createHomeStyles(theme) {
+  return {
+  root: { flex: 1, backgroundColor: theme.color.bg0 },
+  mapWaiting: {
+    backgroundColor: theme.color.bg0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+  },
+  mapWaitingText: { color: theme.color.textMuted, fontSize: 16, lineHeight: 24, textAlign: 'center' },
   topHud: {
     position: 'absolute',
     top: 0,
@@ -678,7 +695,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   brand: {
-    color: COLORS.text,
+    color: theme.color.text,
     fontSize: 22,
     fontWeight: '900',
     letterSpacing: 0.5,
@@ -690,66 +707,66 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: 'rgba(15, 23, 42, 0.82)',
+    backgroundColor: theme.color.surface,
     borderWidth: 1,
   },
   badgeDot: { width: 8, height: 8, borderRadius: 4 },
   badgeText: { fontWeight: '800', fontSize: 11, letterSpacing: 0.8 },
   countdownChip: {
     alignSelf: 'flex-start',
-    backgroundColor: 'rgba(245, 158, 11, 0.92)',
+    backgroundColor: theme.color.warningSoft,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 10,
   },
-  countdownText: { color: '#0F172A', fontWeight: '800' },
+  countdownText: { color: theme.color.warning, fontWeight: '800' },
   warningChip: {
-    backgroundColor: 'rgba(245, 158, 11, 0.88)',
+    backgroundColor: theme.color.warningSoft,
     borderRadius: 12,
     padding: 10,
   },
-  warningText: { color: '#0F172A', fontWeight: '700' },
+  warningText: { color: theme.color.warning, fontWeight: '700' },
   infoChip: {
     alignSelf: 'flex-start',
-    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    backgroundColor: theme.color.surface,
     borderRadius: 10,
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
-  infoChipText: { color: COLORS.muted, fontWeight: '600', fontSize: 12 },
+  infoChipText: { color: theme.color.textMuted, fontWeight: '600', fontSize: 12 },
   drawer: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(15, 23, 42, 0.94)',
+    backgroundColor: theme.color.surface,
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     borderTopWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: theme.color.border,
   },
   drawerHandle: { alignItems: 'center', paddingVertical: 10 },
   handleBar: {
     width: 48,
     height: 5,
     borderRadius: 3,
-    backgroundColor: '#475569',
+    backgroundColor: theme.color.borderStrong,
   },
   tabRow: {
     flexDirection: 'row',
     marginHorizontal: 16,
     marginBottom: 8,
-    backgroundColor: COLORS.slate,
+    backgroundColor: theme.color.surface,
     borderRadius: 14,
     padding: 4,
   },
   tab: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
-  tabActive: { backgroundColor: COLORS.border },
-  tabLabel: { color: COLORS.muted, fontWeight: '600', fontSize: 13 },
-  tabLabelActive: { color: COLORS.text },
+  tabActive: { backgroundColor: theme.color.border },
+  tabLabel: { color: theme.color.textMuted, fontWeight: '600', fontSize: 13 },
+  tabLabelActive: { color: theme.color.text },
   drawerScroll: { flex: 1, paddingHorizontal: 16 },
   sectionLabel: {
-    color: COLORS.muted,
+    color: theme.color.textMuted,
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0.8,
@@ -758,13 +775,13 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   input: {
-    backgroundColor: COLORS.slate,
+    backgroundColor: theme.color.surface,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: theme.color.border,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    color: COLORS.text,
+    color: theme.color.text,
     marginBottom: 8,
   },
   pinRow: { flexDirection: 'row', gap: 8 },
@@ -776,30 +793,31 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.slate,
+    borderColor: theme.color.border,
+    backgroundColor: theme.color.surface,
   },
-  timerChipActive: { borderColor: COLORS.emerald, backgroundColor: 'rgba(16,185,129,0.15)' },
-  timerChipText: { color: COLORS.text, fontWeight: '600', fontSize: 12 },
+  timerChipActive: { borderColor: theme.color.success, backgroundColor: theme.color.successSoft },
+  timerChipText: { color: theme.color.text, fontWeight: '600', fontSize: 12 },
   actionBtn: {
-    backgroundColor: COLORS.emerald,
+    backgroundColor: theme.color.success,
     borderRadius: 16,
     paddingVertical: 15,
     alignItems: 'center',
     marginTop: 4,
   },
   actionBtnDisabled: { opacity: 0.45 },
-  actionBtnText: { color: '#0F172A', fontWeight: '800', fontSize: 15 },
+  actionBtnText: { color: theme.color.onSuccess, fontWeight: '800', fontSize: 15 },
   secondaryBtn: {
     marginTop: 10,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: theme.color.border,
     paddingVertical: 12,
     alignItems: 'center',
   },
-  secondaryBtnText: { color: COLORS.muted, fontWeight: '700' },
-  dispatchingText: { color: COLORS.amber, fontWeight: '700', marginTop: 8, textAlign: 'center' },
-  dispatchError: { color: COLORS.crimson, fontWeight: '700', marginTop: 8 },
+  secondaryBtnText: { color: theme.color.textMuted, fontWeight: '700' },
+  dispatchingText: { color: theme.color.warning, fontWeight: '700', marginTop: 8, textAlign: 'center' },
+  dispatchError: { color: theme.color.critical, fontWeight: '700', marginTop: 8 },
   alertBlock: { marginTop: 12 },
-});
+  };
+}

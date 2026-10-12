@@ -102,6 +102,18 @@ describe('isTrackerCapabilityValid', () => {
     const session = baseSession();
     assert.equal(isTrackerCapabilityValid(session, session.trackerToken), true);
     assert.equal(isTrackerCapabilityValid(session, token()), false);
+    assert.equal(isTrackerCapabilityValid(session, `${session.trackerToken}</script>`), false);
+    assert.equal(isTrackerCapabilityValid(session, `${session.trackerToken}aa`), false);
+  });
+});
+
+describe('tracker capability outside production', () => {
+  it('denies a session id with no capability', () => {
+    const session = baseSession();
+    assert.equal(authorizeTrackerSocket(session, null, false).allowed, false);
+    const read = authorizeSessionRead(session, { user: null, trackerToken: null, secureMode: false });
+    assert.equal(read.allowed, false);
+    assert.equal(read.reason, 'FORBIDDEN');
   });
 });
 

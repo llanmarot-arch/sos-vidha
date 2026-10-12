@@ -357,6 +357,26 @@ export function describeIncident(record, { offsetMinutes } = {}) {
     case SYNC_STATUS.SYNCING:
       return { tone: 'warning', title: 'Sending to the server…', text: `${pressed} Not confirmed yet.` };
     case SYNC_STATUS.SERVER_RECEIVED: {
+      if (record.statusReason === 'DELIVERY_UNCONFIRMED') {
+        return {
+          tone: 'warning',
+          title: 'Server has this SOS — delivery not confirmed',
+          text: `${pressed} This phone did not get proof that contacts were notified. If you still need help, call emergency services or start a new SOS.`,
+        };
+      }
+      const serverRows = (record.ledger || []).filter((entry) => entry.route === ROUTE.SERVER);
+      if (
+        serverRows.length > 0 &&
+        serverRows.every(
+          (entry) => entry.status === RECIPIENT_STATUS.UNKNOWN && /Outcome unknown/.test(entry.detail || '')
+        )
+      ) {
+        return {
+          tone: 'warning',
+          title: 'Server has this SOS — delivery not confirmed',
+          text: `${pressed} The server recorded it, and the notification outcome is unknown. If you still need help, call emergency services.`,
+        };
+      }
       const at = record.server?.receivedAt ? ` at ${formatClock(record.server.receivedAt, offsetMinutes)}` : '';
       return {
         tone: 'success',

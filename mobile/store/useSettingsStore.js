@@ -1,21 +1,39 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../constants/config';
-import { readAppearance, writeAppearance, applyLiveAppearance, sanitizeAppearance } from '../theme/appearance';
+import {
+  readAppearance,
+  storeAppearance,
+  applyLiveAppearance,
+  sanitizeAppearance,
+  hasStoredAppearance,
+  mergeLoadedAppearance,
+  reduceAppearance,
+} from '../theme/appearance';
+import { applyDocumentLocale, hasStoredLocale, readLocale, resolveLoadedLocale, storeLocale } from '../i18n/locale';
+import { sanitizeLocale } from '../i18n/translate';
 
 const STORAGE_KEY = '@sosvidha/system_settings';
 
 const DEFAULTS = {
   apiEndpoint: API_BASE_URL,
-  powerButtonTaps: 3,
-  shakeSensitivity: 0.65,
-  crashSensitivity: 0.75,
-  impactDetectionEnabled: true,
-  shakeDetectionEnabled: true,
   displayName: '',
   phone: '',
+  locale: readLocale(),
   ...readAppearance(),
 };
+
+let hydrationSeq = 0;
+
+function settingsPayload(state) {
+  return {
+    apiEndpoint: state.apiEndpoint,
+    displayName: state.displayName,
+    phone: state.phone,
+    locale: sanitizeLocale(state.locale),
+    ...sanitizeAppearance(state),
+  };
+}
 
 export const useSettingsStore = create((set, get) => ({
   ...DEFAULTS,
@@ -23,55 +41,60 @@ export const useSettingsStore = create((set, get) => ({
   saving: false,
 
   loadSettings: async () => {
-    const raw = await AsyncStorage.getItem(STORAGE_KEY);
-    const saved = raw ? JSON.parse(raw) : {};
-    const appearance = readAppearance();
-    set({ ...DEFAULTS, ...saved, ...appearance, loaded: true });
+    if (get().loaded) return;
+    const seq = hydrationSeq;
+    let saved = {};
+    try {
+      const raw = await AsyncStorage.getItem(STORAGE_KEY);
+      saved = raw ? JSON.parse(raw) : {};
+    } catch {
+      saved = {};
+    }
+    if (seq !== hydrationSeq || get().loaded) return;
+    const appearance = mergeLoadedAppearance(saved, readAppearance(), hasStoredAppearance());
+    const locale = resolveLoadedLocale(saved.locale, hasStoredLocale());
+    storeAppearance(appearance);
+    storeLocale(locale);
     applyLiveAppearance(appearance);
+    applyDocumentLocale(locale);
+    set({
+      apiEndpoint: typeof saved.apiEndpoint === 'string' && saved.apiEndpoint ? saved.apiEndpoint : DEFAULTS.apiEndpoint,
+      displayName: typeof saved.displayName === 'string' ? saved.displayName : '',
+      phone: typeof saved.phone === 'string' ? saved.phone : '',
+      ...appearance,
+      locale,
+      loaded: true,
+    });
+  },
+
+  setLocale: (locale) => {
+    hydrationSeq += 1;
+    const next = storeLocale(locale);
+    applyDocumentLocale(next);
+    set({ locale: next, loaded: true });
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(settingsPayload(get()))).catch(() => {});
   },
 
   patch: (patch) => set(patch),
 
-  /** Text size and reduced motion apply immediately. Colour choices are stored when settings are saved. */
+  /** Scheme, accent, contrast, text size, and reduced motion apply and persist immediately. */
   setAppearance: (partial) => {
-    const live = {};
-    const pending = {};
-    for (const [key, value] of Object.entries(partial)) {
-      if (key === 'textScale' || key === 'reduceMotion') live[key] = value;
-      else pending[key] = value;
-    }
-    if (Object.keys(live).length) {
-      const next = writeAppearance(live);
-      applyLiveAppearance(next);
-      set(live);
-    }
-    if (Object.keys(pending).length) set(pending);
+    hydrationSeq += 1;
+    const next = reduceAppearance(get(), partial);
+    storeAppearance(next);
+    applyLiveAppearance(next);
+    set({ ...next, loaded: true });
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(settingsPayload(get()))).catch(() => {});
   },
 
   saveSettings: async () => {
     set({ saving: true });
     const state = get();
     const appearance = sanitizeAppearance(state);
-    const previous = readAppearance();
-    writeAppearance(appearance);
+    storeAppearance(appearance);
     applyLiveAppearance(appearance);
-    const payload = {
-      apiEndpoint: state.apiEndpoint,
-      powerButtonTaps: state.powerButtonTaps,
-      shakeSensitivity: state.shakeSensitivity,
-      crashSensitivity: state.crashSensitivity,
-      impactDetectionEnabled: state.impactDetectionEnabled,
-      shakeDetectionEnabled: state.shakeDetectionEnabled,
-      displayName: state.displayName,
-      phone: state.phone,
-      ...appearance,
-    };
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    set({ saving: false });
-    const colorsChanged =
-      previous.scheme !== appearance.scheme ||
-      previous.accent !== appearance.accent ||
-      previous.highContrast !== appearance.highContrast;
-    return { colorsChanged };
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(settingsPayload(state)));
+    set({ saving: false, ...appearance });
+    return { colorsChanged: false };
   },
 }));

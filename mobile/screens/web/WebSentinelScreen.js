@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet } from 'react-native';
+import { ScrollView } from 'react-native';
 import ScreenHeader from '../../components/ScreenHeader';
 import SentinelRadar from '../../components/SentinelRadar';
-import { tokens } from '../../theme/tokens';
+import { useThemedStyles } from '../../theme/useTheme';
 import { requestLocationPermissions, getCurrentPosition } from '../../services/webLocationService';
 import { LoadingState } from '../../components/UiStates';
+import { useI18n } from '../../i18n/useI18n';
 
 export default function WebSentinelScreen() {
+  const { styles } = useThemedStyles(createStyles);
+  const { t } = useI18n();
   const [coords, setCoords] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -17,27 +20,28 @@ export default function WebSentinelScreen() {
         const pos = await getCurrentPosition();
         setCoords({ latitude: pos.latitude, longitude: pos.longitude });
       } catch {
-        setCoords({ latitude: 28.6139, longitude: 77.209 });
+        setCoords(null);
       }
       setLoading(false);
     })();
   }, []);
 
-  if (loading) return <LoadingState message="Looking for people nearby…" />;
+  if (loading) return <LoadingState message={t('sentinel.loading')} />;
 
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.content}>
       <ScreenHeader
-        title="Nearby help"
-        subtitle="Let SOS-Vidha users close to you know you need help. Your exact location stays hidden."
-        status="Connected"
+        title={t('sentinel.title')}
+        subtitle={t('sentinel.subtitle')}
       />
-      <SentinelRadar latitude={coords.latitude} longitude={coords.longitude} />
+      <SentinelRadar latitude={coords?.latitude} longitude={coords?.longitude} />
     </ScrollView>
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: tokens.color.bg0 },
-  content: { padding: tokens.spacing.lg, paddingBottom: 40 },
-});
+function createStyles(theme) {
+  return {
+  root: { flex: 1, backgroundColor: theme.color.bg0 },
+  content: { padding: theme.spacing.lg, paddingBottom: 40 },
+};
+}

@@ -1,15 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import ScreenHeader from '../../components/ScreenHeader';
 import FormField from '../../components/FormField';
 import AppButton from '../../components/AppButton';
-import { tokens } from '../../theme/tokens';
+import { useThemedStyles } from '../../theme/useTheme';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useProfileStore } from '../../store/useProfileStore';
 import { useContactsStore, validatePhone } from '../../store/useContactsStore';
 import { LoadingState, EmptyState, SuccessBanner } from '../../components/UiStates';
 
 export default function WebProfileScreen({ onBack, onManageGuardians }) {
+  const { styles } = useThemedStyles(createStyles);
   const user = useAuthStore((s) => s.user);
   const signOut = useAuthStore((s) => s.signOut);
   const profile = useProfileStore((s) => s.profile);
@@ -116,28 +117,30 @@ export default function WebProfileScreen({ onBack, onManageGuardians }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: tokens.color.bg0 },
-  content: { padding: tokens.spacing.lg, paddingBottom: 40 },
-  backBtn: { minHeight: tokens.minTouch, justifyContent: 'center', alignSelf: 'flex-start', marginBottom: tokens.spacing.sm },
-  back: { color: tokens.color.primary, fontWeight: '700', fontSize: 16 },
+function createStyles(theme) {
+  return {
+  root: { flex: 1, backgroundColor: theme.color.bg0 },
+  content: { padding: theme.spacing.lg, paddingBottom: 40 },
+  backBtn: { minHeight: theme.minTouch, justifyContent: 'center', alignSelf: 'flex-start', marginBottom: theme.spacing.sm },
+  back: { color: theme.color.accentOnSurface, fontWeight: '700', fontSize: 16 },
   section: {
-    backgroundColor: tokens.color.surface,
-    borderRadius: tokens.radius.lg,
-    padding: tokens.spacing.lg,
-    marginBottom: tokens.spacing.lg,
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.lg,
+    marginBottom: theme.spacing.lg,
     borderWidth: 1,
-    borderColor: tokens.color.border,
-    gap: tokens.spacing.sm,
+    borderColor: theme.color.border,
+    gap: theme.spacing.sm,
   },
-  sectionTitle: { ...tokens.typography.title, color: tokens.color.text, marginBottom: tokens.spacing.sm },
+  sectionTitle: { ...theme.typography.title, color: theme.color.text, marginBottom: theme.spacing.sm },
   contactRow: {
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: tokens.color.border,
+    borderBottomColor: theme.color.border,
   },
-  contactName: { color: tokens.color.text, fontWeight: '700', fontSize: 16 },
-  contactPhone: { color: tokens.color.text, marginTop: 2, fontSize: 15 },
-  contactRel: { color: tokens.color.textSubtle, fontSize: 14, marginTop: 2 },
-  error: { color: tokens.color.critical, marginBottom: tokens.spacing.md, lineHeight: 22, fontSize: 15, fontWeight: '600' },
-});
+  contactName: { color: theme.color.text, fontWeight: '700', fontSize: 16 },
+  contactPhone: { color: theme.color.text, marginTop: 2, fontSize: 15 },
+  contactRel: { color: theme.color.textSubtle, fontSize: 14, marginTop: 2 },
+  error: { color: theme.color.critical, marginBottom: theme.spacing.md, lineHeight: 22, fontSize: 15, fontWeight: '600' },
+};
+}

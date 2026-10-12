@@ -12,12 +12,16 @@ const DELIVERY_FIELDS = [
   'providerMessageSid',
   'providerStatus',
   'providerErrorCode',
+  'bodySha256',
+  'leaseUntil',
   'lastAttemptAt',
   'acceptedAt',
   'sentAt',
   'deliveredAt',
   'failedAt',
 ];
+
+const RECOVERABLE_STATUSES = ['ACTIVE', 'EMERGENCY', 'DURESS_ACTIVE'];
 
 const INCIDENT_PATCH_FIELDS = ['status', 'emergencyAt', 'endedAt', 'trackerRevokedAt'];
 
@@ -92,8 +96,10 @@ class MemoryIncidentRepository {
       channel: input.channel,
       toPhone: input.toPhone,
       bodySha256: input.bodySha256 || null,
+      idempotencyKey: `${input.incidentId}:${input.recipientKey}:${input.channel}`,
       status: 'pending',
       attempts: 0,
+      leaseUntil: null,
       providerMessageSid: null,
       providerStatus: null,
       providerErrorCode: null,
@@ -127,6 +133,45 @@ class MemoryIncidentRepository {
     return [...this.deliveries.values()]
       .filter((d) => d.incidentId === incidentId)
       .map((d) => ({ ...d }));
+  }
+
+  async listRecoverableIncidents(nowMs) {
+    const out = [];
+    for (const incident of this.incidents.values()) {
+      if (!RECOVERABLE_STATUSES.includes(incident.status)) continue;
+      if (incident.endedAt || incident.trackerRevokedAt) continue;
+      if (incident.trackerExpiresAt != null && incident.trackerExpiresAt <= nowMs) continue;
+      out.push({ ...incident, location: incident.location ? { ...incident.location } : null });
+    }
+    return out;
+  }
+
+  async updateIncidentLocation(id, patch) {
+    const incident = this.incidents.get(id);
+    if (!incident) return null;
+    if (patch.location) incident.location = { ...patch.location };
+    if (patch.locationStatus) incident.locationStatus = patch.locationStatus;
+    if (patch.locationUnavailableReason !== undefined) {
+      incident.locationUnavailableReason = patch.locationUnavailableReason;
+    }
+    incident.updatedAt = this.now();
+    return { ...incident, location: incident.location ? { ...incident.location } : null };
+  }
+
+  /** Sets a lease without changing status. pending still means the provider was not called. */
+  async acquireLease(id, leaseMs) {
+    const delivery = this.deliveries.get(id);
+    if (!delivery) return { acquired: false, delivery: null };
+    if (delivery.providerMessageSid || !['pending', 'retrying'].includes(delivery.status)) {
+      return { acquired: false, delivery: { ...delivery } };
+    }
+    const now = this.now();
+    if (delivery.leaseUntil && delivery.leaseUntil > now) {
+      return { acquired: false, delivery: { ...delivery } };
+    }
+    delivery.leaseUntil = now + leaseMs;
+    delivery.updatedAt = now;
+    return { acquired: true, delivery: { ...delivery } };
   }
 }
 
@@ -172,8 +217,28 @@ function incidentFromRow(row) {
     endedAt: ms(row.ended_at),
     locationStatus: row.location_status,
     locationUnavailableReason: row.location_unavailable_reason,
+    location:
+      row.location_latitude == null
+        ? null
+        : {
+            latitude: row.location_latitude,
+            longitude: row.location_longitude,
+            accuracy: row.location_accuracy_m,
+            timestamp: ms(row.location_captured_at),
+          },
+    safeZone:
+      row.safe_zone_latitude == null
+        ? null
+        : {
+            latitude: row.safe_zone_latitude,
+            longitude: row.safe_zone_longitude,
+            radiusM: row.safe_zone_radius_m,
+          },
+    trackerTokenSha256: row.tracker_token_sha256,
     trackerExpiresAt: ms(row.tracker_expires_at),
     trackerRevokedAt: ms(row.tracker_revoked_at),
+    createdAt: ms(row.created_at),
+    runtimeEnc: row.runtime_enc || null,
   };
 }
 
@@ -183,13 +248,15 @@ const DELIVERY_COLUMN = {
   providerMessageSid: 'provider_message_sid',
   providerStatus: 'provider_status',
   providerErrorCode: 'provider_error_code',
+  bodySha256: 'body_sha256',
+  leaseUntil: 'lease_until',
   lastAttemptAt: 'last_attempt_at',
   acceptedAt: 'accepted_at',
   sentAt: 'sent_at',
   deliveredAt: 'delivered_at',
   failedAt: 'failed_at',
 };
-const TIME_FIELDS = new Set(['lastAttemptAt', 'acceptedAt', 'sentAt', 'deliveredAt', 'failedAt']);
+const TIME_FIELDS = new Set(['leaseUntil', 'lastAttemptAt', 'acceptedAt', 'sentAt', 'deliveredAt', 'failedAt']);
 
 function deliveryFromRow(row) {
   if (!row) return null;
@@ -203,6 +270,8 @@ function deliveryFromRow(row) {
     channel: row.channel,
     toPhone: row.to_phone_e164,
     bodySha256: row.body_sha256,
+    idempotencyKey: row.idempotency_key || null,
+    leaseUntil: ms(row.lease_until),
     status: row.status,
     attempts: row.attempts,
     providerMessageSid: row.provider_message_sid,
@@ -225,10 +294,25 @@ class SupabaseIncidentRepository {
     this.db = admin;
   }
 
+  async attachRuntime(incident) {
+    if (!incident) return null;
+    const { data, error } = await this.db
+      .from('sos_incident_runtime')
+      .select('runtime_enc')
+      .eq('incident_id', incident.id)
+      .maybeSingle();
+    if (error) throw new Error('Failed to read incident runtime');
+    return { ...incident, runtimeEnc: data?.runtime_enc || null };
+  }
+
   async createIncident(record) {
-    const { data, error } = await this.db.from('sos_incidents').insert(incidentToRow(record)).select().single();
-    if (!error) return { incident: incidentFromRow(data), created: true };
-    if (error.code === UNIQUE_VIOLATION && record.clientRequestId) {
+    const { data, error } = await this.db.rpc('persist_sos_incident', {
+      p_incident: incidentToRow(record),
+      p_runtime_enc: record.runtimeEnc || null,
+    });
+    if (error) throw new Error(`Failed to persist incident (${error.code || 'unknown'})`);
+    if (data) return { incident: { ...incidentFromRow(data), runtimeEnc: record.runtimeEnc || null }, created: true };
+    if (record.clientRequestId) {
       const { data: existing, error: readError } = await this.db
         .from('sos_incidents')
         .select()
@@ -236,9 +320,9 @@ class SupabaseIncidentRepository {
         .eq('client_request_id', record.clientRequestId)
         .single();
       if (readError) throw new Error('Failed to read existing incident');
-      return { incident: incidentFromRow(existing), created: false };
+      return { incident: await this.attachRuntime(incidentFromRow(existing)), created: false };
     }
-    throw new Error(`Failed to persist incident (${error.code || 'unknown'})`);
+    throw new Error('Failed to persist incident (unknown)');
   }
 
   async getIncident(id) {
@@ -256,6 +340,41 @@ class SupabaseIncidentRepository {
     const { data, error } = await this.db.from('sos_incidents').update(row).eq('id', id).select().maybeSingle();
     if (error) throw new Error('Failed to update incident');
     return incidentFromRow(data);
+  }
+
+  async updateIncidentLocation(id, patch) {
+    const row = {};
+    if (patch.location) {
+      row.location_latitude = patch.location.latitude;
+      row.location_longitude = patch.location.longitude;
+      row.location_accuracy_m = patch.location.accuracy ?? null;
+      row.location_captured_at = iso(patch.location.timestamp);
+    }
+    if (patch.locationStatus) row.location_status = patch.locationStatus;
+    if (patch.locationUnavailableReason !== undefined) {
+      row.location_unavailable_reason = patch.locationUnavailableReason;
+    }
+    const { data, error } = await this.db.from('sos_incidents').update(row).eq('id', id).select().maybeSingle();
+    if (error) throw new Error('Failed to update incident location');
+    return incidentFromRow(data);
+  }
+
+  async listRecoverableIncidents(nowMs) {
+    const { data, error } = await this.db
+      .from('sos_incidents')
+      .select()
+      .in('status', RECOVERABLE_STATUSES)
+      .is('ended_at', null)
+      .is('tracker_revoked_at', null);
+    if (error) throw new Error('Failed to list recoverable incidents');
+    const rows = (data || [])
+      .map(incidentFromRow)
+      .filter((incident) => incident.trackerExpiresAt == null || incident.trackerExpiresAt > nowMs);
+    const withRuntime = [];
+    for (const incident of rows) {
+      withRuntime.push(await this.attachRuntime(incident));
+    }
+    return withRuntime;
   }
 
   async countEmergencyIncidentsSince(userId, sinceMs, excludeId) {
@@ -280,6 +399,7 @@ class SupabaseIncidentRepository {
       channel: input.channel,
       to_phone_e164: input.toPhone,
       body_sha256: input.bodySha256 || null,
+      idempotency_key: `${input.incidentId}:${input.recipientKey}:${input.channel}`,
       status: 'pending',
       attempts: 0,
     };
@@ -328,6 +448,26 @@ class SupabaseIncidentRepository {
       .order('created_at', { ascending: true });
     if (error) throw new Error('Failed to list deliveries');
     return (data || []).map(deliveryFromRow);
+  }
+
+  async getDelivery(id) {
+    const { data, error } = await this.db.from('sos_alert_deliveries').select().eq('id', id).maybeSingle();
+    if (error) throw new Error('Failed to read delivery');
+    return deliveryFromRow(data);
+  }
+
+  async acquireLease(id, leaseMs) {
+    const until = new Date(Date.now() + leaseMs).toISOString();
+    const { data, error } = await this.db.rpc('claim_alert_delivery_lease', {
+      p_id: id,
+      p_lease_until: until,
+    });
+    if (error) throw new Error('Failed to claim delivery lease');
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row?.id) {
+      return { acquired: false, delivery: await this.getDelivery(id) };
+    }
+    return { acquired: true, delivery: deliveryFromRow(row) };
   }
 }
 

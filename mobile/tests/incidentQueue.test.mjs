@@ -55,7 +55,15 @@ function fakeServer(clock) {
       const key = `${s.userId}:${payload.clientRequestId}`;
       if (byKey.has(key)) {
         const id = byKey.get(key);
-        if (live.has(id)) return { sessionId: id, activatedAt: clock.t, reused: true, disarmToken: 'disarm-secret' };
+        if (live.has(id)) {
+          return {
+            sessionId: id,
+            activatedAt: clock.t,
+            reused: true,
+            disarmToken: 'disarm-secret',
+            deliveries: s.deliveries,
+          };
+        }
         throw httpError(409, 'INCIDENT_EXISTS', { incidentId: id });
       }
       const id = `srv-${byKey.size + 1}`;
@@ -275,9 +283,48 @@ describe('repeated sync and duplicate prevention', () => {
     env.clock.t += 5000;
     const [retry] = await env.syncer.syncDue();
     assert.equal(retry.record.status, SYNC_STATUS.SERVER_RECEIVED);
+    assert.equal(retry.record.statusReason, 'DELIVERY_UNCONFIRMED');
     assert.equal(retry.record.server.incidentId, 'srv-1');
+    assert.equal(retry.session, null);
+    assert.equal(describeIncident(retry.record).tone, 'warning');
+    assert.match(describeIncident(retry.record).text, /did not get proof/);
     assert.equal(env.server.incidentCount(), 1);
     assert.equal(env.server.notifications, 2);
+  });
+
+  it('a retry of a live incident returns the stored notification state and does not send again', async () => {
+    const env = setup();
+    env.server.mode = 'save-then-timeout';
+    await activate(env);
+    await env.syncer.syncIncident(ID);
+    env.server.deliveries = [{ id: 'd1', channel: 'sms', status: 'accepted', recipientName: 'Ravi' }];
+    env.clock.t += 5000;
+    const [retry] = await env.syncer.syncDue();
+    assert.equal(env.server.calls.length, 2);
+    assert.equal(env.server.notifications, 2);
+    assert.equal(retry.record.status, SYNC_STATUS.SERVER_RECEIVED);
+    const row = retry.record.ledger.find((entry) => entry.recipientName === 'Ravi');
+    assert.equal(row.status, RECIPIENT_STATUS.SUBMITTED_TO_PROVIDER);
+    assert.notEqual(row.status, RECIPIENT_STATUS.DELIVERED);
+  });
+
+  it('keeps provider statuses from a 409 and does not call them delivered', async () => {
+    const env = setup();
+    await activate(env);
+    env.server.syncIncident = async () => {
+      throw httpError(409, 'INCIDENT_EXISTS', {
+        incidentId: 'srv-kept',
+        deliveries: [{ id: 'd1', channel: 'sms', status: 'accepted', recipientName: 'Ravi' }],
+      });
+    };
+    const result = await env.syncer.syncIncident(ID);
+    assert.equal(result.session, null);
+    assert.equal(result.record.status, SYNC_STATUS.SERVER_RECEIVED);
+    assert.equal(result.record.statusReason, null);
+    const row = result.record.ledger.find((entry) => entry.recipientName === 'Ravi');
+    assert.equal(row.status, RECIPIENT_STATUS.SUBMITTED_TO_PROVIDER);
+    assert.notEqual(row.status, RECIPIENT_STATUS.DELIVERED);
+    assert.match(describeIncident(result.record).text, /Check each contact/);
   });
 
   it('safely resumes a send interrupted by an app kill', async () => {
@@ -344,7 +391,7 @@ describe('auth and ownership', () => {
     assert.deepEqual(classifySyncError(networkError()), { outcome: 'RETRY', reason: 'NETWORK', ambiguous: true });
     assert.equal(classifySyncError(httpError(502)).ambiguous, true);
     assert.equal(classifySyncError(httpError(503, 'INCIDENT_NOT_PERSISTED')).ambiguous, false);
-    assert.equal(classifySyncError(httpError(409, 'INCIDENT_EXISTS', { incidentId: 'x' })).outcome, 'RECEIVED');
+    assert.equal(classifySyncError(httpError(409, 'INCIDENT_EXISTS', { incidentId: 'x' })).outcome, 'RECORDED_UNCONFIRMED');
     assert.equal(classifySyncError(httpError(403)).outcome, 'STOP');
   });
 });
@@ -363,6 +410,13 @@ describe('per-recipient ledger', () => {
     assert.equal(map('dry_run'), RECIPIENT_STATUS.NOT_ATTEMPTED);
     assert.equal(map('rate_limited'), RECIPIENT_STATUS.NOT_ATTEMPTED);
     assert.equal(map('something_new'), RECIPIENT_STATUS.UNKNOWN);
+    const unknown = describeIncident({
+      status: SYNC_STATUS.SERVER_RECEIVED,
+      activatedAt: T0,
+      ledger: [ledgerEntryFromServer({ id: 'd', status: 'unconfirmed', recipientName: 'Ravi' })],
+    });
+    assert.equal(unknown.tone, 'warning');
+    assert.doesNotMatch(`${unknown.title} ${unknown.text}`, /\bdelivered\b/i);
   });
 
   it('records provider failure and unknown outcomes from the server with message IDs', async () => {

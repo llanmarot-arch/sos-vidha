@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Platform } from 'react-native';
-import { tokens } from '../theme/tokens';
+import { useThemedStyles } from '../theme/useTheme';
 
 let leafletLoaded = false;
 
@@ -20,7 +20,42 @@ async function ensureLeaflet() {
   return L;
 }
 
+function createStyles(theme) {
+  return {
+    wrapper: { flex: 1, borderRadius: theme.radius.lg, overflow: 'hidden', backgroundColor: theme.color.surface },
+    map: { flex: 1, minHeight: 280, width: '100%' },
+    loadingOverlay: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: theme.color.surface,
+    },
+    fallback: { flex: 1, backgroundColor: theme.color.surface },
+    offlineOverlay: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: theme.color.warningSoft,
+      justifyContent: 'center',
+      padding: theme.spacing.lg,
+      gap: 6,
+      zIndex: 1000,
+    },
+    offlineTitle: { color: theme.color.warning, fontWeight: '800', fontSize: 18, letterSpacing: 0.5 },
+    offlineText: { color: theme.color.text, fontSize: 15, lineHeight: 22 },
+    offlineCoords: { ...theme.typography.mono, color: theme.color.text, fontSize: 15 },
+    partialBanner: {
+      position: 'absolute',
+      left: 8,
+      right: 8,
+      bottom: 8,
+      backgroundColor: theme.color.warningSoft,
+      borderRadius: theme.radius.md,
+      padding: 8,
+      zIndex: 1000,
+    },
+    partialText: { color: theme.color.text, fontSize: 14 },
+  };
+}
+
 export default function LiveMap({ latitude, longitude, accuracy = 15, heartbeat = 'Live' }) {
+  const { theme, styles } = useThemedStyles(createStyles);
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const markerRef = useRef(null);
@@ -28,6 +63,8 @@ export default function LiveMap({ latitude, longitude, accuracy = 15, heartbeat 
   const [ready, setReady] = useState(false);
   // 'loading' | 'ok' | 'partial' | 'unavailable' — based only on tiles that actually loaded or failed.
   const [tiles, setTiles] = useState('loading');
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
 
   useEffect(() => {
     if (Platform.OS !== 'web') return undefined;
@@ -52,18 +89,19 @@ export default function LiveMap({ latitude, longitude, accuracy = 15, heartbeat 
       layer.on('tileerror', () => setTiles(loadedCount > 0 ? 'partial' : 'unavailable'));
       layer.addTo(map);
 
+      const ink = themeRef.current.color;
       markerRef.current = L.circleMarker([latitude, longitude], {
         radius: 9,
-        color: tokens.color.critical,
-        fillColor: tokens.color.critical,
+        color: ink.criticalFill,
+        fillColor: ink.criticalFill,
         fillOpacity: 0.95,
         weight: 2,
       }).addTo(map);
 
       circleRef.current = L.circle([latitude, longitude], {
         radius: accuracy,
-        color: tokens.color.primary,
-        fillColor: tokens.color.primary,
+        color: ink.accentOnSurface,
+        fillColor: ink.accentOnSurface,
         fillOpacity: 0.12,
         weight: 1,
       }).addTo(map);
@@ -88,9 +126,17 @@ export default function LiveMap({ latitude, longitude, accuracy = 15, heartbeat 
     const latLng = [latitude, longitude];
     markerRef.current.setLatLng(latLng);
     circleRef.current.setLatLng(latLng);
+    markerRef.current.setStyle({
+      color: theme.color.criticalFill,
+      fillColor: theme.color.criticalFill,
+    });
+    circleRef.current.setStyle({
+      color: theme.color.accentOnSurface,
+      fillColor: theme.color.accentOnSurface,
+    });
     circleRef.current.setRadius(accuracy);
     mapRef.current.panTo(latLng, { animate: true, duration: 0.4 });
-  }, [latitude, longitude, accuracy, heartbeat]);
+  }, [latitude, longitude, accuracy, heartbeat, theme]);
 
   if (Platform.OS !== 'web') {
     return <View style={styles.fallback} />;
@@ -120,35 +166,3 @@ export default function LiveMap({ latitude, longitude, accuracy = 15, heartbeat 
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  wrapper: { flex: 1, borderRadius: tokens.radius.lg, overflow: 'hidden', backgroundColor: tokens.color.surface },
-  map: { flex: 1, minHeight: 280, width: '100%' },
-  loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: tokens.color.surface,
-  },
-  fallback: { flex: 1, backgroundColor: tokens.color.surface },
-  offlineOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: tokens.color.warningSoft,
-    justifyContent: 'center',
-    padding: tokens.spacing.lg,
-    gap: 6,
-    zIndex: 1000,
-  },
-  offlineTitle: { color: tokens.color.warning, fontWeight: '800', fontSize: 18, letterSpacing: 0.5 },
-  offlineText: { color: tokens.color.text, fontSize: 15, lineHeight: 22 },
-  offlineCoords: { ...tokens.typography.mono, color: tokens.color.text, fontSize: 15 },
-  partialBanner: {
-    position: 'absolute',
-    left: 8,
-    right: 8,
-    bottom: 8,
-    backgroundColor: tokens.color.warningSoft,
-    borderRadius: tokens.radius.md,
-    padding: 8,
-    zIndex: 1000,
-  },
-  partialText: { color: tokens.color.text, fontSize: 14 },
-});

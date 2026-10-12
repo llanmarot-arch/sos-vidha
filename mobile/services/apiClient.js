@@ -67,6 +67,7 @@ async function tryFetch(url, options = {}) {
       err.status = response.status;
       err.code = body.code || null;
       err.incidentId = typeof body.incidentId === 'string' ? body.incidentId : null;
+      err.deliveries = Array.isArray(body.deliveries) ? body.deliveries : null;
       throw err;
     }
 

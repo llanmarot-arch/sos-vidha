@@ -38,6 +38,7 @@ class SessionStore {
       createdAt: now,
       emergencyTriggeredAt: null,
       emergencyReason: null,
+      heartbeatGraceUntil: null,
       duressActive: false,
       socketIds: new Set(),
       trackerSocketIds: new Set(),
@@ -95,6 +96,30 @@ class SessionStore {
       session.emergencyTriggeredAt = at ?? this.now();
     }
     return session;
+  }
+
+  /** Rebuilds a live session from a durable incident. Disarmed sessions are not restored. */
+  restore(payload) {
+    if (!payload?.sessionId || payload.status === 'DISARMED') return null;
+    const existing = this.sessions.get(payload.sessionId);
+    if (existing) return existing.status === 'DISARMED' ? null : existing;
+
+    const record = this.create({
+      ...payload,
+      initialLocation: payload.initialLocation || payload.location || null,
+    });
+    if (payload.createdAt) record.createdAt = payload.createdAt;
+    record.deviceActivatedAt = payload.deviceActivatedAt || null;
+    record.locationUnavailableReason = payload.locationUnavailableReason || null;
+    record.lastHeartbeat = this.now();
+    record.heartbeatGraceUntil = this.now() + 120000;
+    if (payload.status === 'EMERGENCY' || payload.status === 'DURESS_ACTIVE') {
+      record.status = payload.status;
+      record.emergencyTriggeredAt = payload.emergencyTriggeredAt || this.now();
+      record.emergencyReason = 'RECOVERED';
+      record.duressActive = payload.status === 'DURESS_ACTIVE';
+    }
+    return record;
   }
 
   disarmStandard(sessionId) {
@@ -173,6 +198,7 @@ class SessionStore {
     for (const session of this.sessions.values()) {
       if (session.status === 'DISARMED') continue;
       if (session.status === 'EMERGENCY' || session.status === 'DURESS_ACTIVE') continue;
+      if (session.heartbeatGraceUntil && now < session.heartbeatGraceUntil) continue;
 
       const elapsed = now - session.lastHeartbeat;
       if (elapsed >= thresholdMs) {

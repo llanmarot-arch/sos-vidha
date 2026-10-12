@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import AppButton from './AppButton';
-import { tokens } from '../theme/tokens';
+import { useThemedStyles } from '../theme/useTheme';
 import { shareLiveLocation, copyToClipboard, buildMapsUrl } from '../services/locationShareService';
 import { shareToContactWhatsApp } from '../services/whatsappAlertService';
 
@@ -12,6 +12,7 @@ export default function LiveLocationSharePanel({
   trackingUrl,
   contacts = [],
 }) {
+  const { theme, styles } = useThemedStyles(createStyles);
   const [status, setStatus] = useState(null);
   const [sharing, setSharing] = useState(false);
 
@@ -56,7 +57,7 @@ export default function LiveLocationSharePanel({
   return (
     <View style={styles.panel}>
       <View style={styles.header}>
-        <Feather name="share-2" size={20} color={tokens.color.primary} />
+        <Feather name="share-2" size={20} color={theme.color.accentOnSurface} />
         <Text style={styles.title} accessibilityRole="header" aria-level={2}>
           Share my location
         </Text>
@@ -123,31 +124,33 @@ export default function LiveLocationSharePanel({
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(theme) {
+  return {
   panel: {
-    backgroundColor: tokens.color.surface,
-    borderRadius: tokens.radius.lg,
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.lg,
     borderWidth: 1,
-    borderColor: tokens.color.border,
-    padding: tokens.spacing.lg,
-    marginBottom: tokens.spacing.md,
+    borderColor: theme.color.border,
+    padding: theme.spacing.lg,
+    marginBottom: theme.spacing.md,
   },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: tokens.spacing.sm },
-  title: { ...tokens.typography.title, color: tokens.color.text },
-  subtitle: { color: tokens.color.textMuted, fontSize: 15, lineHeight: 22, marginBottom: tokens.spacing.md },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: theme.spacing.sm },
+  title: { ...theme.typography.title, color: theme.color.text },
+  subtitle: { color: theme.color.textMuted, fontSize: 15, lineHeight: 22, marginBottom: theme.spacing.md },
   coordsBox: {
-    backgroundColor: tokens.color.primarySoft,
-    borderRadius: tokens.radius.md,
-    padding: tokens.spacing.md,
-    marginBottom: tokens.spacing.sm,
+    backgroundColor: theme.color.primarySoft,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.md,
+    marginBottom: theme.spacing.sm,
   },
-  coordsLabel: { color: tokens.color.textMuted, fontSize: 14 },
-  coords: { color: tokens.color.text, fontWeight: '700', marginTop: 4, fontSize: 17 },
-  meta: { color: tokens.color.textSubtle, fontSize: 14, marginTop: 4, lineHeight: 20 },
-  waiting: { color: tokens.color.textMuted, marginBottom: tokens.spacing.sm, fontSize: 15 },
-  trackUrl: { ...tokens.typography.mono, color: tokens.color.primary, marginBottom: tokens.spacing.sm },
-  status: { color: tokens.color.success, fontWeight: '700', fontSize: 15, marginBottom: tokens.spacing.sm },
-  actions: { gap: tokens.spacing.sm },
-  contactList: { marginTop: tokens.spacing.md, gap: tokens.spacing.sm },
-  contactTitle: { color: tokens.color.text, fontWeight: '700', fontSize: 16, marginBottom: 4 },
-});
+  coordsLabel: { color: theme.color.textMuted, fontSize: 14 },
+  coords: { color: theme.color.text, fontWeight: '700', marginTop: 4, fontSize: 17 },
+  meta: { color: theme.color.textSubtle, fontSize: 14, marginTop: 4, lineHeight: 20 },
+  waiting: { color: theme.color.textMuted, marginBottom: theme.spacing.sm, fontSize: 15 },
+  trackUrl: { ...theme.typography.mono, color: theme.color.accentOnSurface, marginBottom: theme.spacing.sm },
+  status: { color: theme.color.success, fontWeight: '700', fontSize: 15, marginBottom: theme.spacing.sm },
+  actions: { gap: theme.spacing.sm },
+  contactList: { marginTop: theme.spacing.md, gap: theme.spacing.sm },
+  contactTitle: { color: theme.color.text, fontWeight: '700', fontSize: 16, marginBottom: 4 },
+  };
+}

@@ -12,12 +12,10 @@ import {
 } from '../services/incidents/incidentModel';
 import { apiClient } from '../services/apiClient';
 import { isSupabaseConfigured } from '../lib/supabaseClient';
-import { buildSessionPinPayload } from '../utils/pinCrypto';
+import { randomHex } from '../services/incidents/sessionSecrets';
 import { useAuthStore } from './useAuthStore';
 import { useContactsStore } from './useContactsStore';
 
-const DEMO_STANDARD_PIN = '1234';
-const DEMO_DURESS_PIN = '9999';
 /** A new SOS press within this window retries the unsent one instead of creating a second alert. */
 const REUSE_UNSENT_WITHIN_MS = 30 * 60 * 1000;
 const MIN_TIMER_MS = 1000;
@@ -28,8 +26,7 @@ function getAuth() {
 }
 
 async function buildRequestExtras() {
-  const pin = await buildSessionPinPayload(DEMO_STANDARD_PIN, DEMO_DURESS_PIN);
-  const extras = { ...pin };
+  const extras = { standardPin: randomHex(32), duressPin: randomHex(32) };
   if (!isSupabaseConfigured()) {
     // Local development only: the server ignores client numbers when accounts are configured.
     const contacts = useContactsStore.getState().contacts;

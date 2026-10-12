@@ -1,10 +1,4 @@
 import { Platform, Linking } from 'react-native';
-import { API_BASE_URL } from '../constants/config';
-
-export function buildTrackingUrl(sessionId) {
-  const base = API_BASE_URL.replace(/\/$/, '');
-  return `${base}/track/${sessionId}`;
-}
 
 export function buildMapsUrl(latitude, longitude) {
   return `https://www.google.com/maps?q=${latitude},${longitude}&z=17`;

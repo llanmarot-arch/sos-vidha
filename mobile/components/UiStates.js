@@ -1,17 +1,40 @@
 import React from 'react';
-import { View, Text, ActivityIndicator, StyleSheet, TouchableOpacity } from 'react-native';
-import { tokens } from '../theme/tokens';
+import { View, Text, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { useThemedStyles } from '../theme/useTheme';
+
+function createStyles(theme) {
+  return {
+    center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: theme.spacing.xl, gap: theme.spacing.sm },
+    text: { color: theme.color.textMuted, marginTop: theme.spacing.sm, fontSize: 16 },
+    title: { color: theme.color.text, fontWeight: '700', fontSize: 18, textAlign: 'center' },
+    desc: { color: theme.color.textMuted, textAlign: 'center', lineHeight: 24, fontSize: 16 },
+    errorTitle: { color: theme.color.critical, fontWeight: '700', fontSize: 18 },
+    retryBtn: { minHeight: theme.minTouch, justifyContent: 'center', paddingHorizontal: theme.spacing.lg },
+    retry: { color: theme.color.accentOnSurface, fontWeight: '700', fontSize: 16 },
+    success: {
+      backgroundColor: theme.color.successSoft,
+      borderLeftColor: theme.color.success,
+      borderLeftWidth: 4,
+      borderRadius: theme.radius.md,
+      padding: theme.spacing.md,
+      marginBottom: theme.spacing.md,
+    },
+    successText: { color: theme.color.success, fontWeight: '700', fontSize: 15, lineHeight: 22 },
+  };
+}
 
 export function LoadingState({ message = 'Loading…' }) {
+  const { theme, styles } = useThemedStyles(createStyles);
   return (
     <View style={styles.center} accessibilityLiveRegion="polite" accessibilityLabel={message}>
-      <ActivityIndicator color={tokens.color.primary} size="large" />
+      <ActivityIndicator color={theme.color.accentOnSurface} size="large" />
       <Text style={styles.text}>{message}</Text>
     </View>
   );
 }
 
 export function EmptyState({ title, description }) {
+  const { styles } = useThemedStyles(createStyles);
   return (
     <View style={styles.center}>
       <Text style={styles.title} accessibilityRole="header" aria-level={2}>
@@ -23,6 +46,7 @@ export function EmptyState({ title, description }) {
 }
 
 export function ErrorState({ message, onRetry }) {
+  const { styles } = useThemedStyles(createStyles);
   return (
     <View style={styles.center} accessibilityRole="alert">
       <Text style={styles.errorTitle}>Something went wrong</Text>
@@ -37,28 +61,10 @@ export function ErrorState({ message, onRetry }) {
 }
 
 export function SuccessBanner({ message }) {
+  const { styles } = useThemedStyles(createStyles);
   return (
     <View style={styles.success} accessibilityLiveRegion="polite" role="status">
       <Text style={styles.successText}>{message}</Text>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: tokens.spacing.xl, gap: tokens.spacing.sm },
-  text: { color: tokens.color.textMuted, marginTop: tokens.spacing.sm, fontSize: 16 },
-  title: { color: tokens.color.text, fontWeight: '700', fontSize: 18, textAlign: 'center' },
-  desc: { color: tokens.color.textMuted, textAlign: 'center', lineHeight: 24, fontSize: 16 },
-  errorTitle: { color: tokens.color.critical, fontWeight: '700', fontSize: 18 },
-  retryBtn: { minHeight: tokens.minTouch, justifyContent: 'center', paddingHorizontal: tokens.spacing.lg },
-  retry: { color: tokens.color.primary, fontWeight: '700', fontSize: 16 },
-  success: {
-    backgroundColor: tokens.color.successSoft,
-    borderLeftColor: tokens.color.success,
-    borderLeftWidth: 4,
-    borderRadius: tokens.radius.md,
-    padding: tokens.spacing.md,
-    marginBottom: tokens.spacing.md,
-  },
-  successText: { color: tokens.color.success, fontWeight: '700', fontSize: 15, lineHeight: 22 },
-});

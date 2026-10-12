@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useRef } from 'react';
-import { View, Text, Pressable, StyleSheet, Animated, ActivityIndicator } from 'react-native';
+import { View, Text, Pressable, Animated, ActivityIndicator } from 'react-native';
 import Svg, { Circle as SvgCircle } from 'react-native-svg';
 import * as Haptics from 'expo-haptics';
-import { tokens, SOS_STATES } from '../theme/tokens';
+import { SOS_STATES } from '../theme/tokens';
+import { useThemedStyles } from '../theme/useTheme';
+import { useI18n } from '../i18n/useI18n';
 
 const AnimatedCircle = Animated.createAnimatedComponent(SvgCircle);
 const HOLD_MS = 1500;
@@ -19,6 +21,8 @@ export default function SOSHoldButton({
   disabled,
   loading = false,
 }) {
+  const { theme, styles } = useThemedStyles(createStyles);
+  const { t } = useI18n();
   const progress = useRef(new Animated.Value(0)).current;
   const holdTimer = useRef(null);
 
@@ -49,11 +53,11 @@ export default function SOSHoldButton({
   const strokeDashoffset = progress.interpolate({ inputRange: [0, 1], outputRange: [C, 0] });
 
   const labelMap = {
-    [SOS_STATES.IDLE]: disabled ? 'Add a contact to turn on SOS' : 'Press and hold for SOS',
-    [SOS_STATES.HOLDING]: 'Keep holding…',
-    [SOS_STATES.COUNTDOWN]: 'You can still cancel',
-    [SOS_STATES.DISPATCHING]: 'Sending SOS alert…',
-    [SOS_STATES.ACTIVE_ALERT]: 'SOS alert is on',
+    [SOS_STATES.IDLE]: disabled ? t('sos.needContact') : t('sos.hold'),
+    [SOS_STATES.HOLDING]: t('sos.keepHolding'),
+    [SOS_STATES.COUNTDOWN]: t('sos.canCancel'),
+    [SOS_STATES.DISPATCHING]: t('sos.sending'),
+    [SOS_STATES.ACTIVE_ALERT]: t('sos.alertOn'),
   };
 
   const isInactive = disabled || loading || sosState !== SOS_STATES.IDLE;
@@ -65,8 +69,8 @@ export default function SOSHoldButton({
         onPressOut={cancelHold}
         disabled={isInactive}
         accessibilityRole="button"
-        accessibilityLabel="SOS emergency button"
-        accessibilityHint="Press and hold to start an SOS alert. You can cancel during the countdown."
+        accessibilityLabel={t('sos.buttonLabel')}
+        accessibilityHint={t('sos.buttonHint')}
         accessibilityState={{ disabled: isInactive, busy: loading }}
         accessibilityActions={[{ name: 'longpress', label: 'Start SOS alert' }]}
         onAccessibilityAction={(e) => {
@@ -80,7 +84,7 @@ export default function SOSHoldButton({
             cx={SIZE / 2}
             cy={SIZE / 2}
             r={R}
-            stroke={tokens.color.onCritical}
+            stroke={theme.color.onCritical}
             strokeWidth={STROKE}
             fill="transparent"
             strokeDasharray={`${C} ${C}`}
@@ -91,7 +95,7 @@ export default function SOSHoldButton({
           />
         </Svg>
         {loading ? (
-          <ActivityIndicator color={tokens.color.onCritical} />
+          <ActivityIndicator color={theme.color.onCritical} />
         ) : (
           <Text style={styles.icon}>SOS</Text>
         )}
@@ -103,21 +107,23 @@ export default function SOSHoldButton({
   );
 }
 
-const styles = StyleSheet.create({
-  wrap: { alignItems: 'center', gap: tokens.spacing.md },
-  btn: {
-    width: SIZE,
-    height: SIZE,
-    borderRadius: SIZE / 2,
-    backgroundColor: tokens.color.criticalFill,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 6,
-    borderColor: tokens.color.criticalSoft,
-  },
-  btnPressed: { opacity: 0.9, transform: [{ scale: 0.97 }] },
-  btnDisabled: { opacity: 0.4 },
-  svg: { position: 'absolute', top: -6, left: -6 },
-  icon: { color: tokens.color.onCritical, fontWeight: '800', fontSize: 30, letterSpacing: 2 },
-  label: { color: tokens.color.text, fontWeight: '600', fontSize: 16, textAlign: 'center' },
-});
+function createStyles(theme) {
+  return {
+    wrap: { alignItems: 'center', gap: theme.spacing.md },
+    btn: {
+      width: SIZE,
+      height: SIZE,
+      borderRadius: SIZE / 2,
+      backgroundColor: theme.color.criticalFill,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 6,
+      borderColor: theme.color.criticalSoft,
+    },
+    btnPressed: { opacity: 0.9, transform: [{ scale: 0.97 }] },
+    btnDisabled: { opacity: 0.4 },
+    svg: { position: 'absolute', top: -6, left: -6 },
+    icon: { color: theme.color.onCritical, fontWeight: '800', fontSize: 30, letterSpacing: 2 },
+    label: { color: theme.color.text, fontWeight: '600', fontSize: 16, textAlign: 'center' },
+  };
+}
